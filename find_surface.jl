@@ -1,7 +1,8 @@
 using LinearAlgebra
 using JuMP, HiGHS
 using Base.Iterators 
-import Nemo
+using Random
+#import Nemo
 using OffsetArrays
 
 #=
@@ -88,7 +89,8 @@ function find_longitudes_iterative(fans, nsolutions)
 	@constraint(model, M * x .== 0)
 	@constraint(model, x .>= 0)
 	@constraint(model, sum(x) >= 1)
-	perturbation = [1+0.01*rand() for i in 1:n]
+
+	perturbation = 1 .+ 0.1 .* rand(Xoshiro(123), n)
 	@objective(model, Min, sum(x .* perturbation))
 	#@objective(model, Min, sum(x))
 
@@ -108,6 +110,7 @@ function find_longitudes_iterative(fans, nsolutions)
 	return ret
 end
 
+#=
 function find_longitudes(fans)
 	relations = [((x[1] for x in f1), (x[1] for x in f2)) for (f1,f2) in fans]
 
@@ -137,3 +140,4 @@ function find_longitudes(fans)
 	end
 	return ret
 end
+=#

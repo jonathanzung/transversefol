@@ -3,7 +3,7 @@ import regina
 import veering.veering_tri
 import veering.taut as taut
 import veering.transverse_taut
-import sage
+#import sage
 import numpy as np
 
 import sys
@@ -13,7 +13,7 @@ import boundary_triangulation
 
 from veering import file_io
 
-veering_knots_with_data = file_io.parse_data_file("knot_hom_census_with_data.txt")
+#veering_knots_with_data = file_io.parse_data_file("knot_hom_census_with_data.txt")
 
 """
 
@@ -103,12 +103,14 @@ def prepare_example(vt, isosig="test", longitude=None):
 	first_rungs = [runglist[0] for runglist in bt.rungs()]
 	print("firstrungs = " + str(first_rungs), file=info_file)
 
+	print("alledges = " + str(bt.all_edges()), file=info_file)
+
 	print("weights=[", file=info_file)
 	for e in weights.keys():
 		print(str(e) + "=>" + str(weights[e]) + ",", file=info_file)
 	print("]", file=info_file)
 
-	find_longitudes(vt)
+	#find_longitudes(vt)
 
 	if longitude is not None:
 		l=[0 for i in range(vt.tri.countTriangles())]
@@ -125,20 +127,29 @@ def prepare_by_isosig(isosig):
 	prepare_example(v, isosig = isosig)
 
 if __name__ == "__main__":
-	"""
-	veering_knots = file_io.parse_data_file("knot_hom_census.txt")
-	veering_knots_with_data = file_io.parse_data_file("knot_hom_census_with_data.txt")
-	f=open("batch/manifest.txt","w")
+	veering_census_with_data = file_io.parse_data_file("veering_census_with_data.txt")
+	f=open("batch/2cusp_manifest.txt","w")
 	print("isosigs = [", file=f)
-	for i in range(10):
-		print(veering_knots_with_data[i])
-		x = taut.isosig_to_tri_angle(veering_knots[i])
-		v= veering.veering_tri.veering_triangulation(*x)
-		prepare_example(v, isosig = veering_knots[i])
-		print("\"" + str(veering_knots[i])+"\",",file=f)
-
+	i=0
+	for _line in veering_census_with_data:
+		line = _line.split()
+		if line[7] == "[2,2]":
+			print(line)
+			x = taut.isosig_to_tri_angle(line[0])
+			v = veering.veering_tri.veering_triangulation(*x)
+			prepare_example(v, isosig = line[0])
+			print("\"" + str(line[0])+"\",",file=f)
+			i += 1
+			if i > 20:
+				break
 	print("]",file=f)
 	f.close()
-	"""
-	prepare_by_isosig("eLMkbcddddedde_2100")
+
+	#prepare_by_isosig("eLMkbcddddedde_2100")
 	#prepare_by_isosig("gvLQQcdeffeffffaafa_201102")
+	#prepare_by_isosig("gLLAQcdecfffhsermws_122201")
+	#prepare_by_isosig("fLLQcbecdeepuwsua_20102")	
+	#prepare_by_isosig("fLLQcbeddeehhbghh_01110")
+	#prepare_by_isosig("gLLPQbefefefhhhhhha_011102")
+	#prepare_by_isosig("gLLPQcdfefefuoaaauo_022110")
+	#prepare_by_isosig("gLLPQcdfefefuoaaauo_022110")

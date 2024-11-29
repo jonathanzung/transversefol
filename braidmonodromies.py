@@ -219,6 +219,9 @@ def random_braid(braid_index, length):
 def siddhi(m):
 	return [2,1,3,2,3,3,2,1,3,2,3,3,3,2,1,3,2,3,3,2,3] + reduce(operator.add,[[2,3,2] for i in range(m)],[])
 
+def siddhi_new(m):
+	return reduce(operator.add, [[1,2,3] for i in range(9)]) + reduce(operator.add,[[2,3] for i in range(3*m)],[])
+
 thebestknot = [1,2,2,1,1,2,2,2,2,2,2,2]
 bojun=[1,1,2,1,2,2,2,1,2,1,1,1,2,1,2,2,1,2,1,1,1,2,2,1,2,2,2,1,2,2]
 
@@ -343,13 +346,16 @@ def analyze(bword, name="test"):
 #bun=analyze(siddhi(2),fname="siddhi_vt.pdf")
 
 #bun = analyze(bojun,name="bojun")
-bun=analyze(thebestknot,name="pretzel")
+#bun=analyze(thebestknot,name="pretzel")
 
 
 #n=2
 #bun = analyze(siddhi(n),name="siddhi"+str(n))
 
 
+#the next challengers
+#bun = analyze([1,1,1,3,3,3,2,2,2,1,1,3,3,3,2,2,2], name="challenge1")
+bun = analyze([1,2,3,3,3,2,2,1,1,1,2,3,3,2,1], name="challenge2")
 
 
 
