@@ -90,6 +90,15 @@ def prepare_example(vt, isosig="test", longitude=None):
 	bt=boundary_triangulation.generate_boundary_triangulation(vt.tri,vt.angle,args=args)
 	bt.generate_canvases(args=args)#this does some important setup...
 	bt.draw(fname,args=args)
+
+	"""
+	for tt in bt.torus_triangulation_list:
+		print(tt.find_sideways(tt.tet_faces[0]))
+		print(tt.ladder_holonomy)
+		print(tt.sideways_holonomy)
+		print(tt.sideways_once_holonomy)
+		print(tt.sideways_index_shift)
+	"""
 	
 	weights = {}
 	for e,v in bt.vertical_weights().items():
@@ -102,6 +111,8 @@ def prepare_example(vt, isosig="test", longitude=None):
 	
 	first_rungs = [runglist[0] for runglist in bt.rungs()]
 	print("firstrungs = " + str(first_rungs), file=info_file)
+
+	print("rungs = " + str(bt.rungs()), file=info_file)
 
 	print("alledges = " + str(bt.all_edges()), file=info_file)
 
@@ -133,14 +144,14 @@ if __name__ == "__main__":
 	i=0
 	for _line in veering_census_with_data:
 		line = _line.split()
-		if line[7] == "[2,2]":
+		if line[7] == "[2,2]" and line[1]=="F0":
 			print(line)
 			x = taut.isosig_to_tri_angle(line[0])
 			v = veering.veering_tri.veering_triangulation(*x)
 			prepare_example(v, isosig = line[0])
 			print("\"" + str(line[0])+"\",",file=f)
 			i += 1
-			if i > 20:
+			if i >= 100:
 				break
 	print("]",file=f)
 	f.close()
@@ -153,3 +164,4 @@ if __name__ == "__main__":
 	#prepare_by_isosig("gLLPQbefefefhhhhhha_011102")
 	#prepare_by_isosig("gLLPQcdfefefuoaaauo_022110")
 	#prepare_by_isosig("gLLPQcdfefefuoaaauo_022110")
+	#prepare_by_isosig("jLvvQQQbhigghihgixaxxvvvvcc_102222010")

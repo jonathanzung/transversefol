@@ -1,7 +1,8 @@
 using LinearAlgebra
-using JuMP, HiGHS
+using JuMP, HiGHS 
 using Base.Iterators 
 using Random
+using Base.Threads
 #import Nemo
 using OffsetArrays
 
@@ -31,7 +32,7 @@ end
 function find_longitude(fans)
 	relations = [((x[1] for x in f1), (x[1] for x in f2)) for (f1,f2) in fans]
 
-	l = collect(flatten(flatten(relations)))
+	l = collect(Iterators.flatten(Iterators.flatten(relations)))
 	sort!(l)
 	n = maximum(l)+1
 	@assert length(l) == (maximum(l)+1)*3
@@ -50,6 +51,7 @@ function find_longitude(fans)
 	end
 
 	model = Model(HiGHS.Optimizer)
+	#model = Model(Cbc.Optimizer)
 	set_silent(model)
 	@variable(model, x[1:n], Int)
 	@constraint(model, M * x .== 0)
@@ -62,10 +64,10 @@ function find_longitude(fans)
 	#return Dict((i-1)=>j for (i,j) in enumerate(value.(x)))
 end
 
-function find_longitudes_iterative(fans, nsolutions)
+function find_longitudes_iterative(fans)
 	relations = [((x[1] for x in f1), (x[1] for x in f2)) for (f1,f2) in fans]
 
-	l = collect(flatten(flatten(relations)))
+	l = collect(Iterators.flatten(Iterators.flatten(relations)))
 	sort!(l)
 	n = maximum(l)+1
 	@assert length(l) == (maximum(l)+1)*3
@@ -83,31 +85,47 @@ function find_longitudes_iterative(fans, nsolutions)
 		end
 	end
 
-	model = Model(HiGHS.Optimizer)
-	set_silent(model)
-	@variable(model, x[1:n], Int)
-	@constraint(model, M * x .== 0)
-	@constraint(model, x .>= 0)
-	@constraint(model, sum(x) >= 1)
-
 	perturbation = 1 .+ 0.1 .* rand(Xoshiro(123), n)
-	@objective(model, Min, sum(x .* perturbation))
-	#@objective(model, Min, sum(x))
+	ch=Channel(10*Threads.nthreads())
 
-	ret = []
-	while length(ret) < nsolutions
-		optimize!(model)
-		val=round.(Int,value.(x))
-		objval=sum(value.(x) .* perturbation)
-		O=OffsetArrays.Origin(0)(val)
-		if is_primitive(O)
-			push!(ret, O)
+	function search_interval(a,b)
+		model = Model(HiGHS.Optimizer)
+		set_silent(model)
+		@variable(model, x[1:n], Int)
+		@constraint(model, M * x .== 0)
+		@constraint(model, x .>= 0)
+		@constraint(model, sum(x) >= 1)
+		@constraint(model, sum(x .* perturbation) >= a)
+
+		@objective(model, Min, sum(x .* perturbation))
+		#@objective(model, Min, sum(x))
+
+
+		while true
+			optimize!(model)
+			val=round.(Int,value.(x))
+			objval=sum(value.(x) .* perturbation)
+			O=OffsetArrays.Origin(0)(val)
+			if is_primitive(O)
+				put!(ch, O)
+			end
+			if objval > b
+				break
+			end
+			@constraint(model, sum(x .* perturbation) >= objval + 0.001)
+			#println(collect((i-1)=>j for (i,j) in enumerate(value.(x)) if j!=0))
+			#return Dict((i-1)=>j for (i,j) in enumerate(value.(x)))
 		end
-		@constraint(model, sum(x .* perturbation) >= objval + 0.00001)
-		#println(collect((i-1)=>j for (i,j) in enumerate(value.(x)) if j!=0))
-		#return Dict((i-1)=>j for (i,j) in enumerate(value.(x)))
 	end
-	return ret
+
+	step=2
+	@async @threads :greedy for a in Iterators.countfrom(0,step)
+		search_interval(a,a+step)
+	end
+
+	#todo: clean up tasks when channel is closed
+	return ch
+
 end
 
 #=

@@ -14,6 +14,8 @@ using StaticArrays
 
 import Plots: plot
 
+const CLIP = 10 #don't worry about any slopes of absolute value bigger than CLIP
+
 
 abstract type Homeo end
 
@@ -58,7 +60,7 @@ tupleIndex(J::Junction) = (J.index+1, Int(J.inv)+1)
 #tupleIndex((x,y)::Tuple{S,T}) where {S,T} = (tupleIndex(x)..., tupleIndex(y)...)
 tupleIndex((x,y)::Tuple{Int,Int}) = (x+1,y+1)
 tupleIndex(x::Int) = x+1
-tupleIndex((x,J)::Tuple{Int,Junction}) = (x+1, J.index, Int(J.inv)+1)
+tupleIndex((x,J)::Tuple{Int,Junction}) = (x+1, J.index+1, Int(J.inv)+1)
 
 struct ArrayDict{S,T,N}
 	data::Array{T,N}
@@ -69,11 +71,11 @@ function getindex(A::ArrayDict{S,T,N}, i::S) where {S,T,N}
 	return A.data[CartesianIndex{N}(tupleIndex(i))]
 end
 function getindex(A::ArrayDict{S,T,2}, i::S) where {S,T}
-	#@assert isassigned(A.data, tupleIndex(i)...)
+	@assert isassigned(A.data, tupleIndex(i)...)
 	return A.data[tupleIndex(i)[1], tupleIndex(i)[2]]
 end
 function getindex(A::ArrayDict{S,T,3}, i::S) where {S,T}
-	#@assert isassigned(A.data, tupleIndex(i)...)
+	@assert isassigned(A.data, tupleIndex(i)...)
 	return A.data[tupleIndex(i)[1], tupleIndex(i)[2],tupleIndex(i)[3]]
 end
 function setindex!(A::ArrayDict{S,T,N}, val::T, i::S) where {S,T,N}
@@ -84,8 +86,8 @@ function ArrayDict(D::Dict{S,T}) where {S,T}
 	N=cartesianlength(S)
 	indices = [tupleIndex(i) for i in keys(D)]
 	ranges = (minimum(x[i] for x in indices):maximum(x[i] for x in indices) for i in 1:N)
-	A=Array{T,N}(undef, length.(ranges)...)	
-	data = OffsetArray(A, ranges...)
+	A=Array{T,N}(undef, 1 .+ length.(ranges)...)	
+	#data = OffsetArray(A, ranges...)
 	ret = ArrayDict{S,T,N}(A)
 
 	for (k,v) in D
@@ -102,10 +104,11 @@ struct BoundaryTriangulation
 	weights::ArrayDict{Track, SVector{2,T}, 2}
 	junctions::Vector{Junction}
 	firstrungs::Vector{Track}#one rung in each cusp
+	rungs::Vector{Vector{Track}}
 	alledges::Vector{Vector{Track}}#edges appearing in each cusp
 	#fans is a list of pairs of fans
 	
-	function BoundaryTriangulation(fans, face_coorientations, firstrungs, alledges, _weights)
+	function BoundaryTriangulation(fans, face_coorientations, firstrungs, alledges, rungs)
 		forward=Dict{Track, Tuple{Int,Junction}}()
 		backward=Dict{Track, Tuple{Int,Junction}}()
 
@@ -136,10 +139,21 @@ struct BoundaryTriangulation
 		end
 
 		weights=Dict{Track,SVector{2,T}}()
-		for (x,y) in _weights
-			weights[x] = y
+		for l in alledges
+			for track in l
+				weights[track] = SVector{2,T}([0,0])
+			end
 		end
-		return new(ArrayDict(forward),ArrayDict(backward),ArrayDict(forwardfan),ArrayDict(backwardfan),ArrayDict(weights),junctions,firstrungs, alledges)
+		for l in rungs
+			for track in l
+				weights[track] = SVector{2,T}([1,0])
+			end
+		end
+		bt = new(ArrayDict(forward),ArrayDict(backward),ArrayDict(forwardfan),ArrayDict(backwardfan),ArrayDict(weights),junctions,firstrungs, rungs, alledges)
+
+		compute_vertical_weights!(bt)
+
+		return bt
 	end
 end
 
@@ -458,14 +472,12 @@ function random_candidate(bt,depth)
 	return c
 end
 
+
 function uniform(x,y)
 	@assert y>=x
 	return rand()*(y-x) + x
 end
 
-function approximant_all_slopes(c::Candidate; time=10000)
-	return [approximant(x,time) for x in all_slopes(c; time=time)]
-end
 
 function approximant(x, time)
 	if x==Inf
@@ -481,6 +493,9 @@ function approximant(x, time)
 	end
 end
 
+function approximant_all_slopes(c::Candidate; time=10000)
+	return [approximant(x,time) for x in all_slopes(c; time=time)]
+end
 function all_slopes(c::Candidate; time=200)
 	return [slope(c; s=State(0.023423,rung), time=time) for rung in c.bt.firstrungs]
 end
@@ -519,7 +534,7 @@ end
 
 
 #todo: return confidence interval, and allow to improve the confidence interval with more work.
-function slope(c::Candidate; time=200, s=State(0.312423, (1,0)))
+function slope(c::Candidate; time=200, s=State(0.312423, (1,0)), verbose=false)
 	#weight=T[0,0]
 	w1=T(0)
 	w2=T(0)
@@ -529,7 +544,9 @@ function slope(c::Candidate; time=200, s=State(0.312423, (1,0)))
 	w1+=x[1]
 	w2+=x[2]
 	while abs(w1) + abs(w2) < time
-		#println(s)	
+		if verbose
+			@show s
+		end
 		s=trace_forwards(s, c.bt, c)
 		#weight .+= c.bt.weights[s.e]
 		x=c.bt.weights[s.e]
@@ -641,7 +658,27 @@ struct Longitude
 end
 
 function slopes(l::Longitude)
-	[round.(Int,sum(l.weights[i]*bt.weights[(i,j)] for (i,j) in edgelist)) for edgelist in bt.alledges]
+	tmp = [sum(l.weights[i]*bt.weights[(i,j)] for (i,j) in edgelist) for edgelist in bt.alledges]
+	if false
+	for (ind,i) in enumerate(tmp)
+		#=
+		for x in [i=> l.weights[i] for i in 0:length(l.weights)-1]
+			@show x
+		end
+		@show i
+		@show abs.(i .- round.(Int,i))
+		=#
+		c=longitude_to_candidate(bt,l.weights)
+		#=
+		if sum(abs.(i .- round.(Int,i))) > 0.0001
+			@show slope(c, s=State(0.5, bt.firstrungs[1]), verbose=true)
+		end
+		=#
+
+		@assert sum(abs.(i .- round.(Int,i))) <= 0.0001
+	end
+end
+	return [round.(Int,sum(l.weights[i]*bt.weights[(i,j)] for (i,j) in edgelist)) for edgelist in bt.alledges]
 end
 
 function relu(x)
@@ -662,10 +699,6 @@ function objective(::Type{Lower}, slope, old_slope, target)
 	@assert !isinf(tmp)
 	return tmp
 	#return sum(slope)
-end
-
-function parallel_try_improve(E::Envelope; nsubdivide=0, iters=50000, time=1000, target=[1000,1000], beta=500)
-
 end
 
 function annealing(f, initial, jiggle, betastart, betafinish, nsteps; verbose=true, minacc = 100, maxacc = 5000)
@@ -706,16 +739,18 @@ function annealing(f, initial, jiggle, betastart, betafinish, nsteps; verbose=tr
 	#		@assert false
 		else #improve the accuracy of our computation
 			if newacc < maxacc
-				newacc *= 4
+				newacc *= 3
 				newval = f(jig; acc=newacc)
 			end
 			if curracc < newacc
-				curracc *= 4
+				curracc *= 3
 				currval = f(current; acc = curracc)
 			end
 			@goto here
 		end
-		push!(vals, currval)
+		if verbose
+			push!(vals, currval)
+		end
 
 		if verbose && i%10000 == 0
 			@show (approximant_all_slopes(current))
@@ -758,15 +793,15 @@ length(e::Envelope) = length(e.A)
 function random_trials(bt; nsubdivide=2)
 	N=100000
 	E=PEnvelope()
-	trials=[T[] for i in 1:N]
+	#trials=[T[] for i in 1:N]
 
 
 	#inrange(x) = all(-5 < i < 5 for i in x)
 
 	@threads for i in 1:N
 		c=random_candidate(bt,nsubdivide)
-		trials[i] = all_slopes(c)
-		push!(E, (trials[i],c))
+		#trials[i] = all_slopes(c)
+		push!(E, (all_slopes(c),c))
 	end
 
 	@show [x[1] for x in E.A]
@@ -779,6 +814,19 @@ function random_trials(bt; nsubdivide=2)
 	#scatter!(p, [x[1] for x in accurate_envelope], [x[2] for x in accurate_envelope])
 	#display(p)
 	return E
+end
+
+function extreme_candidates(bt)
+	Elower=Envelope{Lower}()
+	Eupper=Envelope{Upper}()
+
+	@threads :greedy for tmp in Iterators.product(([Piecewise(Linear(),Linear(),0.01, 0.99), Piecewise(Linear(),Linear(),0.99, 0.01)] for i in 1:length(bt.junctions))...)
+		c=Candidate(bt, Dict{Junction, Union{Linear,Piecewise}}(j=>f for (j,f) in zip(bt.junctions,tmp)))
+		ss = approximant_all_slopes(c)
+		push!(Elower, (ss,c))
+		push!(Eupper, (ss,c))
+	end
+	return Elower, Eupper
 end
 
 #=
@@ -815,28 +863,51 @@ function longitude_to_candidate(bt, longitude)
 	return Candidate(bt,d)
 end
 
-function plotjs(A::Vector{Envelope}; maxabs=25)
-	PlotlyJS.plot([_plotjs(E; maxabs=maxabs) for E in A])
+function plotjs(A::Vector{Envelope})
+	PlotlyJS.plot([_plotjs(E) for E in A])
 end
 
-function plotjs(E::Envelope; maxabs=25)
-	plotjs(Envelope[E]; maxabs=maxabs)
+function plotjs(E::Envelope)
+	plotjs(Envelope[E])
 end
 
-function _plotjs(E::Envelope; maxabs=25, fill=false)
-	pts = [x[1] for x in E.A if maximum(abs.(x[1]))<= maxabs]
+function inbounds(pt)
+	return all(abs.(pt) .<= CLIP)
+end
+
+function staircase(E::Envelope{Upper})
+	pts = [x[1] for x in E.A]
+	filter(inbounds, sort!(pts, by=x->x[1]))
+	return sort(vcat(pts,[(pts[i][1], pts[i+1][2]) for i in 1:length(pts)-1]), by=x->(x[1],-x[2]))
+end
+function staircase(E::Envelope{Lower})
+	pts = [x[1] for x in E.A]
+	filter(inbounds, sort!(pts, by=x->x[1]))
+	return sort(vcat(pts,[(pts[i+1][1], pts[i][2]) for i in 1:length(pts)-1]), by=x->(x[1],-x[2]))
+end
+
+const TAUT_COLOUR = "#00cc96"
+const OBSTRUCTION_COLOUR ="#ef553b" 
+const LONGITUDE_COLOUR = "#636EFA"
+
+function _plotjs(E::Envelope{S}; color=TAUT_COLOUR) where {S<:Union{Upper,Lower}}
+	pts = [x[1] for x in E.A]
 	dim = length(pts[1])
 
+	if dim==2
+		all_pts = staircase(E)
+		PlotlyJS.scatter(x=[x[1] for x in all_pts],y=[x[2] for x in all_pts], mode="lines", line=attr(color=color))
+	else
+		@assert false
+	end
+end
+
+function _plotjs(E::Envelope; color=OBSTRUCTION_COLOUR)
+	pts = filter(inbounds, [x[1] for x in E.A])
+	dim = length(pts[1])
 
 	if dim==2
-		if fill
-			sort!(pts, by=x->x[1])
-			all_pts=sort(vcat(pts,[(pts[i][1], pts[i+1][2]) for i in 1:length(pts)-1]), by=x->(x[1],-x[2]))
-			PlotlyJS.scatter(x=[x[1] for x in all_pts],y=[x[2] for x in all_pts], mode="markers", fill="tozeroy")
-			#construct the sequence
-		else
-			PlotlyJS.scatter(x=[x[1] for x in pts],y=[x[2] for x in pts], mode="markers")
-		end
+		PlotlyJS.scatter(x=[x[1] for x in pts],y=[x[2] for x in pts], mode="markers", marker=attr(color=color))
 	elseif dim==3
 		PlotlyJS.scatter(x=[x[1] for x in pts],y=[x[2] for x in pts], z=[x[3] for x in pts], mode="markers", type="scatter3d")
 	else
@@ -844,7 +915,8 @@ function _plotjs(E::Envelope; maxabs=25, fill=false)
 	end
 end
 
-function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper})
+function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper}; color=TAUT_COLOUR)
+	#=
 	pts1 = [x[1] for x in E1.A]
 	pts2 = [x[1] for x in E2.A]
 
@@ -854,22 +926,35 @@ function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper})
 	sort!(pts2, by=x->x[1])
 	all_pts1=sort(vcat(pts1,[(pts1[i+1][1], pts1[i][2]) for i in 1:length(pts1)-1]), by=x->(x[1],-x[2]))
 	all_pts2=sort(vcat(pts2,[(pts2[i][1], pts2[i+1][2]) for i in 1:length(pts2)-1]), by=x->(x[1],-x[2]))
+	=#
 
-	if all(all_pts1[1] .< all_pts2[1])
+	all_pts1=staircase(E1)
+	all_pts2=staircase(E2)
+
+	if all(all_pts1[1] .<= all_pts2[1])
 		pushfirst!(all_pts2, [all_pts1[1][1], all_pts2[1][2]])
 	end
 
-	if all(all_pts1[end] .< all_pts2[end])
+	if all(all_pts1[end] .<= all_pts2[end])
 		push!(all_pts1, [all_pts2[end][1], all_pts1[end][2]])
 	end
 
-	return [PlotlyJS.scatter(x=[x[1] for x in all_pts1],y=[x[2] for x in all_pts1], mode="markers", fill="tonexty", fillcolor="#00000000", marker=attr(color="#1f77b4")),
-			PlotlyJS.scatter(x=[x[1] for x in all_pts2],y=[x[2] for x in all_pts2], mode="markers", fill="tonexty",marker=attr(color="#1f77b4")),
+	return [PlotlyJS.scatter(x=[x[1] for x in all_pts1],y=[x[2] for x in all_pts1], mode="lines", fill="tonexty", fillcolor="#00000000", line=attr(color=color)),
+			PlotlyJS.scatter(x=[x[1] for x in all_pts2],y=[x[2] for x in all_pts2], mode="lines", fill="tonexty",line=attr(color=color)),
 			]
 end
 
 function clear()
 	deletetraces!(p,0:10)
+end
+
+function normalizedchi(L::Longitude)
+	ss=slopes(L)
+	chi = -sum(L.weights)//2
+	npunctures = [gcd(a,b) for (a,b) in ss]
+	g=gcd(npunctures...)
+	closed_chi = chi + npunctures[2] + npunctures[1]
+	return closed_chi/g
 end
 
 function constraints(L::Longitude)
@@ -891,7 +976,6 @@ function constraints(L::Longitude)
 
 	q,p = ss[1]
 	s,r = ss[2]
-	closed_chi = chi+npunctures[2]
 	#=
 		if q-closed_chi == 0 
 			return (0,0)
@@ -899,12 +983,144 @@ function constraints(L::Longitude)
 			return (p/(q - closed_chi),  r/s)
 		end
 	=#
-	return [ (p/q,  r/(s+ (chi+npunctures[1]))),
-			(p/(q+(chi+npunctures[2])), r/s)]
 
+	ret = []
+	#@show (q,p,s,r)
+	#@show npunctures
+	ret = []
+	#suppose (0,0) is an S^1 \times S^2 surgery 
+	#
+	
+	#@show chi+npunctures[1]
+	#@show chi+npunctures[2]
+	push!(ret, (p//q, constraint((r+s//2),s,chi+npunctures[1])))
+	push!(ret, (p//q, -constraint(-(r+s//2),s,chi+npunctures[1])))
+	push!(ret, (constraint(p,q,chi+npunctures[2]), r//s))
+	push!(ret, (-constraint(-p,q,chi+npunctures[2]), r//s))
+
+	return ret
+
+	#=
+	for sgn in [-1,1]
+		if s - (chi+npunctures[1]) != 0
+
+			n=floor(r/s)
+			rp,sp = numerator(r/s-n), denominator(r/s-n)
+
+			push!(ret,(p/q,  n + r/(s - (chi+npunctures[1]))))
+
+		else
+			push!(ret,(CLIP,CLIP))
+		end
+		if q + sgn*(chi+npunctures[2]) != 0
+			push!(ret, (p/(q + sgn*(chi+npunctures[2])), r/s))
+		else
+			push!(ret,(CLIP,CLIP))
+		end
+	end
+	return ret
+
+	=#
 
 	#r/s, r/(s+chi)
 
 	#(r+s)/s, (r+s)/(s+chi)
 end
 
+function intersection_weights(bt::BoundaryTriangulation, loop::Vector{Track})
+	weights=DefaultDict{Track,Rational{Int}}(0)
+	for i in 1:length(loop)
+		#@show loop[i]
+		t1,t2 = loop[i], loop[mod1(i+1, length(loop))]
+		i1, J1=bt.forward[t1]
+		i2, J2=bt.backward[t2]
+		@assert J1==J2
+		J=J1
+
+		#@show i1, i2
+
+		for k in 0:J.left_len-1
+			#@show (k,J)
+			#@show bt.forwardfan[(k,J)]
+			weights[bt.forwardfan[(k, J)]]+= if k < i1
+				1//2
+			elseif k > i1
+				-1//2
+			else
+				0
+			end
+		end
+		for k in 0:J.right_len-1
+			#@show (k,J)
+			#@show bt.backwardfan[(k,J)]
+			weights[bt.backwardfan[(k, J)]] += if k < i2
+				-1//2
+			elseif k > i2
+				1//2
+			else
+				0
+			end
+		end
+	end
+	return weights
+end
+
+function compute_loop(bt,rungs)
+	S=Set{Track}(rungs)
+	Q=Queue{Vector{Track}}()
+	for rung in rungs
+		enqueue!(Q, Track[rung])
+	end
+	while !isempty(Q)
+		l=dequeue!(Q)
+		@show l
+
+		_,J=bt.forward[l[end]]
+		for k in 0:J.right_len-1
+			next = bt.backwardfan[(k, J)]
+			if next == l[1]
+				return l
+			end
+			if !(next in S) && !(next in l)
+				enqueue!(Q,vcat(l, Track[next]))
+			end
+		end
+	end
+	@assert false #failed to find a loop
+end
+
+function compute_vertical_weights!(bt::BoundaryTriangulation)
+	for runglist in bt.rungs
+		loop = compute_loop(bt, runglist)
+		weights = intersection_weights(bt, loop)
+		for (k,v) in weights
+			bt.weights[k] = SVector{2,T}([bt.weights[k][1], v])
+		end
+	end
+end
+
+function constraint(r,s,chi) #careful, it's possible gcd(r,s)=/= 1
+	if s<=0
+		return CLIP
+	end
+	@assert s > 0
+	n=floor(r//s)
+
+	if s+chi == 0
+		return CLIP
+	elseif s+chi > 0
+		#return n//1 + (r-n*s)//(s + chi)
+		return r//(s + chi)
+	else
+		return CLIP
+	end
+end
+
+function bound(E::Envelope{Upper}, r)
+	pts = filter(pt-> pt[1] >= r, [x[1] for x in E.A])
+	return minimum(x[2] for x in pts; init=CLIP)
+end
+function bound(E::Envelope{Lower}, r)
+	pts = filter(pt-> pt[1] <= r, [x[1] for x in E.A])
+	return maximum(x[2] for x in pts; init=-CLIP)
+end

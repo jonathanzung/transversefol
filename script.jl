@@ -1,17 +1,29 @@
-function setup(isosig)
+using Serialization
+using DataFrames
+
+include("search.jl")
+include("find_surface.jl")
+
+function setup(isosig; nlongs = 30)
+	println("setting up $(isosig)")
+	flush(stdout)
 	include("batch/$(isosig).txt")
-	global bt=BoundaryTriangulation(fans, face_coorientations, firstrungs,alledges,weights)
+
+
+	global bt=BoundaryTriangulation(fans, face_coorientations, firstrungs,alledges,rungs)
+
 	#=
 	global longitude
 	if longitude == nothing
 		longitude=find_longitude(fans)#weights of the different faces
 	end
 	=#
-	global longitudes = find_longitudes_iterative(fans,1000)
+	#global longitudes = find_longitudes_iterative(fans,1000)
 	#push!(longitudes, longitude)
 	#sort!(longitudes, by=l->all_slopes(longitude_to_candidate(bt,l),time=30000)[1])
 	
-	global p=PlotlyJS.plot()
+	global ncusps = length(bt.firstrungs)
+	
 	#=
 	function valid_slope(s)
 		return true
@@ -20,30 +32,225 @@ function setup(isosig)
 	filter!(l-> valid_slope(all_slopes(longitude_to_candidate(bt,l),time=2000)), longitudes)
 	=#
 
-	global Elong=Envelope()
-	global Econstr=PEnvelope()
-	for l in longitudes
-		local c
-		c=longitude_to_candidate(bt,l)
-		x=approximant_all_slopes(c, time=400*sum(l))
-		push!(Elong, (x,c))
-		for constr in constraints(Longitude(bt,l))
-			push!(Econstr, (constr, c))
+	global Elong=PEnvelope()
+
+	global longitudeDF = DataFrame()
+	global long_dict = DefaultDict(()->[])
+
+	for l in find_longitudes_iterative(fans)
+		#ss=approximant_all_slopes(c, time=400*sum(l))
+		ss = [y//x for (x,y) in slopes(Longitude(bt,l))]
+
+		if !haskey(long_dict, ss)
+			@show length(long_dict)
+			flush(stdout)
+		end
+		push!(long_dict[ss], l)
+
+
+		if length(long_dict) >= nlongs
+			break
 		end
 	end
-	global upperE = Envelope{Upper}(copy(Elong.A))
-	global lowerE = Envelope{Lower}(copy(Elong.A))
-	add_trace!(p, _plotjs(Elong))
-	add_trace!(p, _plotjs(Econstr))
 
-	display(p)
+	for (ss, ls) in long_dict
+		_, i = findmin(x-> (count(y->y==0, x), sum(x.^2)), ls)
+		c=longitude_to_candidate(bt,ls[i])
+		push!(Elong, (ss, c))
+		for (i,constr) in enumerate(constraints(Longitude(bt,ls[i])))
+			push!(Econstr[i], (constr, c))
+		end
+		push!(longitudeDF, (ss=slopes(Longitude(bt,ls[i])), l=ls[i], chi = -sum(ls[i])//2, normalizedchi = normalizedchi(Longitude(bt,ls[i]))))
+	end
+
+	global long_ranges = [[minimum(filter(r -> abs(r) < CLIP, collect(x[i] for x in keys(long_dict)))),
+						   maximum(filter(r -> abs(r) < CLIP, collect(x[i] for x in keys(long_dict))))] for i in 1:ncusps]
+	global p=PlotlyJS.plot()
+
+	global Eupper = Envelope{Upper}(copy(Elong.A))
+	global Elower = Envelope{Lower}(copy(Elong.A))
+
 
 	println("done setup")
+	flush(stdout)
+end
+function regimen(E::Envelope{S}) where {S}
+	if S==Upper
+		target=[CLIP,CLIP]
+	elseif S==Lower
+		target=[-CLIP,-CLIP]
+	else
+		@assert false
+	end
+	E = try_improve(E; nsubdivide=1, iters=30000, time=1000, target=target, radius=0.002)
+	flush(stdout)
+	if isinteractive()
+		add_trace!(p, _plotjs(E))
+	end
+	E = try_improve(E; nsubdivide=0, iters=100000, time=2000, target=target, radius=0.001, beta=800)
+	flush(stdout)
+	if isinteractive()
+		add_trace!(p, _plotjs(E))
+	end
+	E = try_improve(E; nsubdivide=0, iters=1000000, time=2000, target=target, radius=0.001, beta=1300)
+	flush(stdout)
+	if isinteractive()
+		add_trace!(p, _plotjs(E))
+	end
+	return E
 end
 
-include("find_surface.jl")
-include("batch/2cusp_manifest.txt")
-isosig = "siddhi2"
+function runjob(i)
+	include("batch/2cusp_manifest.txt")
+	setup(isosig)
+	global p
+	#isosig=isosigs[i]
+	#setup(isosig)
+
+	#randE = random_trials(bt)
+	#add_trace!(p, _plotjs(randE))
+
+	global Eupper = regimen(Eupper)
+	global Elower = regimen(Elower)
+	addtraces!(p, _plotjs(Elower, Eupper)...)
+	add_trace!(p, _plotjs(Elong; color=LONGITUDE_COLOUR))
+	for i in 1:4
+		add_trace!(p, _plotjs(Econstr[i]))
+	end
+
+	xe = 0.5 * (long_ranges[1][2]-long_ranges[1][1])
+	ye = 0.5 * (long_ranges[2][2]-long_ranges[2][1])
+	update_xaxes!(p,range=[long_ranges[1][1]-xe, long_ranges[1][2]+xe],autorange=false, title="cusp 1 slope")
+	update_yaxes!(p,range=[long_ranges[2][1]-ye, long_ranges[2][2]+ye], autorange=false, title="cusp 2 slope")
+
+	PlotlyJS.savefig(p, "batch/$(isosig).html")
+	serialize("batch/$(isosig).jls", (bt=bt, Eupper=Eupper, Elower=Elower, Elong=Elong, longitudeDF=longitudeDF))
+	flush(stdout)
+end
+
+function quickview(i)
+	include("batch/2cusp_manifest.txt")
+	#isosig=isosigs[i]
+	isosig="ivLLQQccfhfeghghwadiwadrv_20110220"
+	#isosig="hLLLQkbeegefgghhhahabg_0111022"
+	isosig="jLvvQQQbhigghihgixaxxvvvvcc_102222010"
+	setup(isosig)
+
+
+
+
+	global longitudeDF = DataFrame()
+	for (ss, ls) in long_dict
+		_, i = findmin(x-> (count(y->y==0, x), sum(x.^2)), ls)
+		c=longitude_to_candidate(bt,ls[i])
+		push!(longitudeDF, (ss=slopes(Longitude(bt,ls[i])), l=ls[i], chi = -sum(ls[i])//2, normalizedchi = normalizedchi(Longitude(bt,ls[i]))))
+	end
+
+	global long_ranges = [[minimum(filter(r -> abs(r) < CLIP, collect(x[i] for x in keys(long_dict)))),
+						   maximum(filter(r -> abs(r) < CLIP, collect(x[i] for x in keys(long_dict))))] for i in 1:ncusps]
+
+	config = PlotConfig(modeBarButtonsToAdd=[
+    "drawline",
+    "drawopenpath",
+    "drawclosedpath",
+    "drawcircle",
+    "drawrect",
+    "eraseshape"
+	])
+	global p=PlotlyJS.plot(config=config)
+
+	global Eupper = Envelope{Upper}(copy(Elong.A))
+	global Elower = Envelope{Lower}(copy(Elong.A))
+
+	Elower2, Eupper2 = extreme_candidates(bt)
+
+
+
+	#global p=PlotlyJS.plot()
+	global Econstr=[PEnvelope() for i in 1:4]
+
+	#display(p)
+	#isosig=isosigs[i]
+	#setup(isosig)
+
+	#randE = random_trials(bt)
+	#add_trace!(p, _plotjs(randE))
+
+	#global Eupper = regimen(Eupper)
+	#global Elower = regimen(Elower)
+	#global tup = deserialize("/home/jonathan/engaging_sshfs/transversefol/batch/$(isosig).jls")
+	addtraces!(p, _plotjs(Elower, Eupper)...)
+
+	addtraces!(p, _plotjs(Elower2, Eupper2)...)
+	#add_trace!(p, _plotjs(Elong; color=LONGITUDE_COLOUR))
+
+	global longitudeDF = DataFrame()
+	for (ss, ls) in long_dict
+		_, i = findmin(x-> (count(y->y==0, x), sum(x.^2)), ls)
+		c=longitude_to_candidate(bt,ls[i])
+		nchi = normalizedchi(Longitude(bt,ls[i]))
+		push!(longitudeDF, (ss=slopes(Longitude(bt,ls[i])), x=ss[1], y=ss[2], l=ls[i], chi = -sum(ls[i])//2, nchi = nchi, text=string((nch=nchi,ss=ss))))
+		for (i,constr) in enumerate(constraints(Longitude(bt,ls[i])))
+			push!(Econstr[i], (constr, c))
+		end
+	end
+	add_trace!(p, PlotlyJS.scatter(longitudeDF,x=:x, y=:y, marker=attr(line=attr(width=0), size=25 ./ log.(4 .- longitudeDF[!,:nchi]), color=LONGITUDE_COLOUR), text=:text, mode="markers"))
+	for i in 1:4
+		add_trace!(p, _plotjs(Econstr[i]))
+	end
+
+
+	xe = 0.5 * (long_ranges[1][2]-long_ranges[1][1])
+	ye = 0.5 * (long_ranges[2][2]-long_ranges[2][1])
+	update_xaxes!(p,range=[long_ranges[1][1]-xe, long_ranges[1][2]+xe],autorange=false, title="cusp 1 slope")
+	update_yaxes!(p,range=[long_ranges[2][1]-ye, long_ranges[2][2]+ye], autorange=false, title="cusp 2 slope")
+
+
+
+	#PlotlyJS.savefig(p, "batch/$(isosig).html")
+	#serialize("batch/$(isosig).jls", (bt=bt, Eupper=Eupper, Elower=Elower, Elong=Elong))
+	flush(stdout)
+	p
+end
+
+function aggregate_bounds()
+	include("batch/2cusp_manifest.txt")
+	#isosig=isosigs[i]
+	isosig="ivLLQQccfhfeghghwadiwadrv_20110220"
+	#isosig="hLLLQkbeegefgghhhahabg_0111022"
+	#setup(isosig)
+	#
+	
+
+
+	for isosig in isosigs[30:50]
+	end
+
+	global p=PlotlyJS.plot(config=config)
+
+	global Eupper = Envelope{Upper}(copy(Elong.A))
+	global Elower = Envelope{Lower}(copy(Elong.A))
+
+	Elower2, Eupper2 = extreme_candidates(bt)
+
+
+
+	#global p=PlotlyJS.plot()
+	global Econstr=[PEnvelope() for i in 1:4]
+
+	#display(p)
+	#isosig=isosigs[i]
+	#setup(isosig)
+
+	#randE = random_trials(bt)
+	#add_trace!(p, _plotjs(randE))
+
+	#global Eupper = regimen(Eupper)
+	#global Elower = regimen(Elower)
+	global tup = deserialize("/home/jonathan/engaging_sshfs/transversefol/batch/$(isosig).jls")
+end
+
+#isosig = "siddhi2"
 #isosig = "eLMkbcddddedde_2100"
 #isosig = "gvLQQcdeffeffffaafa_201102"
 #isosig = "gLLAQcdecfffhsermws_122201"
@@ -55,54 +262,18 @@ isosig = "siddhi2"
 #isosig = "gLLPQcdfefefuoaaauo_022110"
 #setup(isosig)
 
-
-
-
-function regimen(E::Envelope{S}) where {S}
-	if S==Upper
-		#target=[-1.35,0.075]
-		target=[10,10]
-	elseif S==Lower
-		target=[-10,-10]
-	else
-		@assert false
-	end
-	E = try_improve(E; nsubdivide=1, iters=30000, time=1000, target=target, radius=0.002)
-	add_trace!(p, _plotjs(E))
-	E = try_improve(E; nsubdivide=0, iters=100000, time=2000, target=target, radius=0.001, beta=800)
-	add_trace!(p, _plotjs(E))
-	E = try_improve(E; nsubdivide=0, iters=1000000, time=2000, target=target, radius=0.001, beta=1500)
-	add_trace!(p, _plotjs(E))
-	return E
-end
-
-
-
-
 #=
-dummy_candidate=random_candidate(bt,0)
-L6a2E=Envelope()
-push!(L6a2E, (T[0,0], dummy_candidate))
-for pt in [(-4,1/2+0.000001), (-2,1/2), (-1, 1/3), (-1/2, 1/6), (-1/3, 1/9), (-1/4, 1/12), (-1/5, 1/15), (-1/6, 1/18)]
-	push!(L6a2E, (T[pt...], dummy_candidate))
+isosig = "eLMkbcddddedde_2100"
+setup(isosig)
+
+Profile.init(n=10^7, delay=0.01)
+@profile setup(isosig)
+using ProfileView
+if isinteractive()
+	ProfileView.view()
 end
 =#
 
-
-
-randE = random_trials(bt)
-add_trace!(p, _plotjs(randE))
-#display(p)
-#add_trace!(p, _plotjs(E2, maxabs=40))
-#
-
-using ProfileView
-upperE = regimen(upperE)
-Profile.init(n=2*10^7, delay=0.005)
-lowerE = @profile regimen(lowerE)
-ProfileView.view()
-
-addtraces!(p, _plotjs(lowerE, upperE)...)
 
 
 #add_trace!(p, _plotjs(L6a2E, fill=true))
@@ -184,3 +355,14 @@ display(p)
 # Records
 # [[0.5, -2.0], [0.014492753623188406, -1.3714285714285714], [-1.375, 0.06666666666666667], [0.25, -1.5], [-1.3703703703703705, 0.014492753623188406], [0.0136986301369863, -1.368421052631579], [-2.0, 0.5], [-1.4, 0.1111111111111111], [0.1111111111111111, -1.4], [0.07142857142857142, -1.375], [0.0, 0.0], [-1.5, 0.25]]
 
+
+
+
+#=
+dummy_candidate=random_candidate(bt,0)
+L6a2E=Envelope()
+push!(L6a2E, (T[0,0], dummy_candidate))
+for pt in [(-4,1/2+0.000001), (-2,1/2), (-1, 1/3), (-1/2, 1/6), (-1/3, 1/9), (-1/4, 1/12), (-1/5, 1/15), (-1/6, 1/18)]
+	push!(L6a2E, (T[pt...], dummy_candidate))
+end
+=#
