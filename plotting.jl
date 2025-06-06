@@ -41,22 +41,23 @@ function _plotjs(E::Envelope{S}; color=TAUT_COLOUR, name="") where {S<:Union{Upp
 	end
 end
 
-function _plotjs(E::Envelope; color=nothing)
+function _plotjs(E::Envelope{S,T}; color=nothing) where {S,T}
 	pts = filter(inbounds, [x[1] for x in E.A])
 
 
 	if length(pts)==0
-		return PlotlyJS.scatter(x=[],y=[], mode="markers")
+		return PlotlyJS.scatter(x=T[],y=T[], mode="markers")
 	end
 	dim = length(pts[1])
 
 	if dim==2
+        _pts = filter(x->abs(x[1]) <= CLIP && abs(x[2]) <= CLIP, pts)
         marker = if color==nothing
             attr()
         else
             attr(color=color)
         end
-		PlotlyJS.scatter(x=[x[1] for x in pts],y=[x[2] for x in pts], mode="markers", marker=marker)
+		PlotlyJS.scatter(x=T[x[1] for x in _pts],y=T[x[2] for x in _pts], mode="markers", marker=marker)
 	elseif dim==3
         marker = if color==nothing
             attr(size=3)
@@ -64,7 +65,7 @@ function _plotjs(E::Envelope; color=nothing)
             attr(color=color,size=3)
         end
 
-		PlotlyJS.scatter(x=[x[1] for x in pts],y=[x[2] for x in pts], z=[x[3] for x in pts], mode="markers", type="scatter3d", marker=marker)
+		PlotlyJS.scatter(x=T[x[1] for x in pts],y=T[x[2] for x in pts], z=T[x[3] for x in pts], mode="markers", type="scatter3d", marker=marker)
 	else
 		@assert false	
 	end

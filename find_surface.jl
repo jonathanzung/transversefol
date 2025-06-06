@@ -206,10 +206,10 @@ function find_longitudes_hom(fans, top_bot_pairs) #find longitudes by homology c
 		end
 	end
 
-	ch=Channel(10*Threads.nthreads())
+	ch=Channel(3*Threads.nthreads())
 
 	function search_interval(a)
-        #println("Searching $(a) from $(Threads.threadid())")
+        println("Searching $(a) from $(Threads.threadid())")
 		model = Model(HiGHS.Optimizer)
 		set_silent(model)
 		@variable(model, x[1:n], Int)

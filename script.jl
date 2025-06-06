@@ -11,14 +11,9 @@ includet("find_surface.jl")
 includet("plotting.jl")
 includet("envelopes.jl")
 
-function count_arcs(bt::BoundaryTriangulation)
-    ncusps = length(bt.rungs)
-    for i in 1:ncusps
-        r = rungs[i]
-        
-        #junctions = unique(forward[x] for x in l
-    end
-end
+includet("envelopes.jl")
+
+include("batch/2cusp_manifest.txt")
 
 function mathematica_print(f::IO, l::Union{Array,Tuple})
 	print(f,"{")
@@ -40,7 +35,7 @@ function mathematica_print(f::IO,l::Real)
 end
 
 function dump_points(isosig)
-    tup = load_isosig(isosig)#deserialize("/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
+    tup = load(isosig)#deserialize("/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
 
     @show length(tup.Elower.A), length(tup.Eupper.A)
     open("pointdump.ma","w") do f
@@ -98,6 +93,14 @@ function compute_longitudes(bt; nlongs=100)
     ch = find_longitudes_hom(fans, top_bot_pairs)
     for l in ch #find_longitudes_hom(fans,top_bot_pairs)
 
+        #=
+        meridian = [[0,1],[1,0],[0,1]]
+
+        @show (sum(l),slopes(Longitude(bt,l)),
+               [det(hcat(x,y)) for (x,y) in zip(meridian, slopes(Longitude(bt,l)))]
+              )
+        #use this to find the class which intersects each meridian exactly once.
+        =#
 		if any([sum(abs.(x))==0 for x in slopes(Longitude(bt,l))])
             @show "rejected"
 			continue
@@ -116,30 +119,36 @@ function compute_longitudes(bt; nlongs=100)
     close(ch)
 
 	for (ss, ls) in long_dict
+
+        #=
+        if 1//4 in ss || -1//4 in ss
+            @show ss
+            @show ls
+        end
+        =#
 		_, i = findmin(x-> (count(y->y==0, x), sum(x.^2)), ls)
 		c=longitude_to_candidate(bt,ls[i])
-		#push!(Elong, (ss, c))
-        push!(Elong, c)
+		push!(Elong, (ss, c))
+        #push!(Elong, c)
 		push!(longitudes, ls[i])
 	end
 	return Elong, longitudes
 end
 
-function load_isosig(isosig)
+function latest_save(isosig)
 	locations=[]
-	#push!(locations, "/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
+	push!(locations, "/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
 	push!(locations, "/home/jonathan/engaging_sshfs/transversefol/batch/$(isosig).jls")
 
 	locations = sort(filter(isfile, locations), by=mtime)
 	if length(locations)==0
 		println("not found")
+        return nothing
 	else
 		println("loading from $(locations[end])")
         println(Dates.unix2datetime(mtime(locations[end]))-Hour(4)) #show in Eastern time zone
+        return locations[end]
 	end
-    tup = deserialize(locations[end])
-
-	return tup
 end
 
 function load(isosig; refresh=false, nlongs=100)
@@ -150,24 +159,27 @@ function load(isosig; refresh=false, nlongs=100)
 		flush(stdout)
 		run(`python3 prepare.py $(isosig)`)
 	end
+
 	include("batch/$(isosig).txt")
 
-	if !isfile("batch/$(isosig).jls") || refresh
+    path = latest_save(isosig)
+
+	if path == nothing || refresh
 		bt=BoundaryTriangulation(fans, face_coorientations, firstrungs, alledges, rungs)	
 		ncusps = length(bt.firstrungs)
 
 		Elong, longitudes = compute_longitudes(bt; nlongs=nlongs)
-		#Eupper = Envelope{Upper}(copy(Elong.A))
-		#Elower = Envelope{Lower}(copy(Elong.A))
+		Eupper = Envelope{Upper}(copy(Elong.A))
+        Elower = Envelope{Lower}([(x,set_roundmode(c, UP)) for (x,c) in Elong.A])
 
-        Eupper= Envelope{Upper,Float64,Cand{DiscreteHomeo}}()
-        Elower= Envelope{Lower,Float64,Cand{DiscreteHomeo}}()
+        #Eupper= Envelope{Upper,Float64,Cand{DiscreteHomeo}}()
+        #Elower= Envelope{Lower,Float64,Cand{DiscreteHomeo}}()
 
 
 		tup = (bt=bt, Eupper=Eupper, Elower=Elower, Elong=Elong, longitudes=longitudes)
 		serialize("batch/$(isosig).jls", tup)
 	else
-		tup = deserialize("batch/$(isosig).jls")
+		tup = deserialize(path)
 		if length(tup.longitudes) < nlongs
 			Elong, longitudes = compute_longitudes(tup.bt; nlongs=nlongs)
             for (x,c) in Elong.A
@@ -183,7 +195,7 @@ function load(isosig; refresh=false, nlongs=100)
 	return tup
 end
 
-function save(isosig, tup)
+function save(isosig, tup) #always save locally
 	serialize("batch/$(isosig).jls", tup)
 end
 
@@ -192,19 +204,19 @@ function regimen(E::Envelope, target::Vector{T}; verbose=false) where {T<:Real}
 	
 	
 	println("phase 1")
-	E = try_improve(E; nsubdivide=1, iters=30000, time=1000, target=target, radius=0.001)
+	E = try_improve(E; nsubdivide=0, iters=30000, time=1000, target=target, radius=0.001)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
 	end
 	println("phase 2")
-	E = try_improve(E; nsubdivide=1, iters=300000, time=2000, target=target, radius=0.001, beta=800)
+	E = try_improve(E; nsubdivide=0, iters=300000, time=2000, target=target, radius=0.001, beta=800)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
 	end
 	println("phase 3")
-	E = try_improve(E; nsubdivide=1, iters=1000000, time=2000, target=target, radius=0.001, beta=1600)
+	#E = try_improve(E; nsubdivide=1, iters=1000000, time=2000, target=target, radius=0.001, beta=1600)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
@@ -215,10 +227,10 @@ end
 function runjob(i::Int; kwargs...)
 	include("batch/2cusp_manifest.txt")
 	isosig=isosigs[i]
-	runjob(isosig; kwargs...)
+	runjob(isosig; index=i, kwargs...)
 end
 
-function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=nothing, fromscratch=false, doprune=false, preprune=false, refresh=false, verbose=false)
+function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=nothing, fromscratch=false, doprune=false, preprune=false, refresh=false, fix=false, verbose=false, index=0)
 	tup = load(isosig, nlongs=nlongs, refresh=refresh)
     #=
 	global p=quickview(tup; isosig=isosig)
@@ -246,7 +258,6 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 	end
 
     if target == :gaps
-        #econstr_lower is the lower bound, but of course it is an Envelope{Upper}
         Econstr_lower, Econstr_upper = obstructions(tup; isosig=isosig)
         Econstr_lower::Envelope{Lower}
         Econstr_upper::Envelope{Upper}
@@ -260,15 +271,15 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
         shuffle!(lower_goals)
 
         Euppertmp = if fromscratch
-                        tup.Elong
+                        Envelope{Upper}(copy(tup.Elong.A))
                     else
-                        prune(Eupper)
+                        Eupper
                     end
 
         Elowertmp = if fromscratch
-                       tup.Elong
+                        Envelope{Lower}([(x,set_roundmode(c, UP)) for (x,c) in tup.Elong.A])
                     else
-                        prune(Elower)
+                        Elower
                     end
 
         @threads for target in upper_goals
@@ -305,13 +316,14 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 											if fromscratch
 												tup.Elong.A
 											else
-                                                prune(Eupper.A)
+                                                Eupper.A
 											end
 											)), target)
 		for x in Etmp.A
 			push!(Eupper, x)
 		end
 	end
+    
 
 	if ex
 		Elower2, Eupper2 = extreme_candidates(tup.bt)
@@ -325,17 +337,15 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 	end
 
 	if rt>0
-		randE = random_trials(tup.bt,ntrials=rt,thickness=5, roundmode=DOWN)
+		randE = random_trials(tup.bt,ntrials=rt,thickness=24, roundmode=DOWN)
         #todo: multithread this
 		@threads for (x,c) in randE.A
             push!(Eupper, (x,c))
-            #push!(Elower, (x,c))
 		end
 
-		randE = random_trials(tup.bt,ntrials=rt,thickness=5, roundmode=UP)
+		randE = random_trials(tup.bt,ntrials=rt,thickness=16, roundmode=UP)
 		@threads for (x,c) in randE.A
-            push!(Elower, (x,c))
-            #push!(Eupper, (x,c))
+            #push!(Elower, (x,c))
         end
 
         serialize("batch/$(isosig).jls", (bt=tup.bt, Eupper=Eupper, Elower=Elower, Elong=tup.Elong, longitudes=tup.longitudes))
@@ -346,16 +356,36 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 		prune!(Elower)
 	end
 
-	p=quickview(tup; isosig=isosig)
+	p=quickview((bt=tup.bt, Eupper=Eupper, Elower=Elower, Elong=tup.Elong, longitudes=tup.longitudes); isosig=isosig, index=index)
 	if isinteractive() && verbose
 		display(p)
 	end
     PlotlyJS.savefig(p, "batch/$(isosig).html")
+    PlotlyJS.savefig(p, "batch/$(index).html")
 	serialize("batch/$(isosig).jls", (bt=tup.bt, Eupper=Eupper, Elower=Elower, Elong=tup.Elong, longitudes=tup.longitudes))
     println("done job")
 	flush(stdout)
 end
 
+function bench(c::Cand)
+    @time for i in 1:1000
+        exact_slope(c)
+    end
+    @time for i in 1:1000
+        slope(c)
+    end
+end
+
+function bench()
+    tup = load(isosigs[1])
+	c=random_cand(tup.bt,32,UP)
+    bench(c)
+end
+
+function viewladderpole(i::Int)
+    include("batch/2cusp_manifest.txt")
+    run(`evince batch/$(isosigs[i]).pdf`)
+end
 
 function quickview(i::Int)
 	#try
@@ -369,7 +399,7 @@ end
 
 
 function quickview(isosig::String; index=0)
-	quickview(load_isosig(isosig); isosig=isosig, index=index)
+	quickview(load(isosig); isosig=isosig, index=index)
 end
 
 #=
@@ -417,9 +447,9 @@ function obstructions(tup::NamedTuple; isosig="")
 
     bt=tup.bt
 
-    Econstr = PEnvelope()
-    Econstr_upper = Envelope{Upper,Float64}()
-    Econstr_lower = Envelope{Lower,Float64}()
+    Econstr = Envelope{Eq, Rational{Int}, Nothing}()
+    Econstr_upper = Envelope{Upper,Rational{Int},Nothing}()
+    Econstr_lower = Envelope{Lower,Rational{Int},Nothing}()
     longitudeDF = DataFrame()
     constrDF = DataFrame()
     long_slopes = []
@@ -439,12 +469,12 @@ function obstructions(tup::NamedTuple; isosig="")
             #@assert connected_components(l,fans)==1
             for (s,info) in constraints(L)
                 if all(!isnan(x) for x in s) && all(!isinf(x) for x in s) && info.npunc==1# && info.interior_prong >= 2
-                    push!(Econstr, (s,c))
+                    push!(Econstr, (s,nothing))
                     if info.dir[2] == -1
-                        push!(Econstr_upper, (s,c))
+                        push!(Econstr_upper, (s,nothing))
                     else
                         @assert info.dir[2] == 1
-                        push!(Econstr_lower, (s,c))
+                        push!(Econstr_lower, (s,nothing))
                     end
 
                 end
@@ -634,27 +664,30 @@ function quickview(tup::NamedTuple; isosig="", index=0)
 
     p=PlotlyJS.plot(layout)
 
-    dummy_candidate=random_cand(tup.bt,1,DOWN)
-
     #contact structures
     #addtraces!(p, _plotjs(Elower, Envelope{Upper,Float64,Cand{DiscreteHomeo}}([([CLIP for i in 1:ncusps], dummy_candidate)]), color=NEG_CONTACT_COLOUR, name="negative contact structures")...)
 
     #addtraces!(p, _plotjs(Envelope{Lower,Float64,Cand{DiscreteHomeo}}([([-CLIP for i in 1:ncusps],dummy_candidate)]), Eupper, color=POS_CONTACT_COLOUR, name="positive contact structures")...)
 
     addtraces!(p, _plotjs(Elower, Eupper, name="Z (foliated region)")...)
-    add_trace!(p, _plotjs(Eupper, name="eupper"))
-
 
     if length(Econstr_lower.A) > 0
-        addtraces!(p, _plotjs(Econstr_lower, Envelope{Upper}([([CLIP for i in 1:ncusps], dummy_candidate)]), color=OBSTRUCTION_COLOUR, name="obstructions")...)
+        addtraces!(p, _plotjs(Econstr_lower, Envelope{Upper}([([CLIP for i in 1:ncusps], nothing)]), color=OBSTRUCTION_COLOUR, name="obstructions")...)
     end
     if length(Econstr_upper.A) > 0
-        addtraces!(p, _plotjs(Envelope{Lower}([([-CLIP for i in 1:ncusps],dummy_candidate)]), Econstr_upper, color=OBSTRUCTION_COLOUR, name="obstructions")...)
+        addtraces!(p, _plotjs(Envelope{Lower}([([-CLIP for i in 1:ncusps],nothing)]), Econstr_upper, color=OBSTRUCTION_COLOUR, name="obstructions")...)
     end
 
+
+    function clip_df(df)
+        return df
+        return subset(df, :x => x->abs.(x).<=CLIP, :y => y->abs.(y).<=CLIP)
+    end
+
+
     #add_trace!(p, _plotjs(tup.Elong, color=LONGITUDE_COLOUR))
-    add_trace!(p, PlotlyJS.scatter(longitudeDF; plotting_directives()..., marker=attr(line=attr(width=0), size=(ncusps<=2 ? 25 : 10) ./ log.(4 .- longitudeDF[!,:nchi]), color=LONGITUDE_COLOUR), text=:text, mode="markers", name="fibrations"))
-    add_trace!(p, PlotlyJS.scatter(constrDF; plotting_directives()..., marker=attr(color=OBSTRUCTION_COLOUR, size=(ncusps<=2 ? 5 : 3)), text=:text, mode="markers", name="obstructions")) 
+    add_trace!(p, PlotlyJS.scatter(clip_df(longitudeDF); plotting_directives()..., marker=attr(line=attr(width=0), size=(ncusps<=2 ? 25 : 10) ./ log.(4 .- longitudeDF[!,:nchi]), color=LONGITUDE_COLOUR), text=:text, mode="markers", name="fibrations"))
+    add_trace!(p, PlotlyJS.scatter(clip_df(constrDF); plotting_directives()..., marker=attr(color=OBSTRUCTION_COLOUR, size=(ncusps<=2 ? 5 : 3)), text=:text, mode="markers", name="obstructions")) 
 
 
 
@@ -715,7 +748,7 @@ function review()
 end
 
 function verify(isosig::String)
-	tup = load_isosig(isosig)
+	tup = load(isosig)
 	@threads for (x,c) in tup.Elower.A
 		@show x, approximant_all_slopes(c)
 	end
@@ -997,7 +1030,7 @@ end
 #244 - 1-prong surgery
 
 function dump_extremal(isosig)
-    tup = load_isosig(isosig)#deserialize("/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
+    tup = load(isosig)#deserialize("/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
 
     @show length(tup.Elower.A), length(tup.Eupper.A)
     for (slopes,cand) in tup.Elower.A
@@ -1013,3 +1046,20 @@ end
 
 
 #bad_examples = [38, 95, 160, 214, 278, 338, 356, 370, 406, 448, 453, 470, 473, 485]
+#
+#
+#
+#
+#
+
+
+
+#For L6a5:
+#Know from magic.py that in snappy coordinates
+#
+#degeneracy = (0,-1), (0,1), (-1,1)
+#fiber = (4,1), (1,-1), (-1,0)
+#meridian = (-1,0), (0,1), (-1,1)
+#
+#So in my coordinates, we know that the meridian is (0, infty, infty)
+#Now we want to change coordinates, so that 0->infty, and 

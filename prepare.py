@@ -150,7 +150,7 @@ def prepare_by_isosig(isosig):
 	prepare_example(v, isosig = isosig)
 
 if __name__ == "__main__":
-	if True:
+	if False:
 		n=3
 		N=500
 		veering_census_with_data = file_io.parse_data_file("veering_census_with_data.txt")
@@ -191,5 +191,6 @@ if __name__ == "__main__":
 	#prepare_by_isosig("gLLPQccdfeffhggaagb_201022")
 	#prepare_by_isosig("iLLAMMccdecffghhhsermstqs_12220120")
 	#prepare_by_isosig("jLLLzQQbeeeghihiixxaavvvvcv_211120000")
+	#prepare_by_isosig("iLLLQPcbeegefhhhhhhahahha_01110221")
 	for isosig in sys.argv[1:]:
 		prepare_by_isosig(isosig)

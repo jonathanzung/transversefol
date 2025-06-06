@@ -1,1 +1,7 @@
 *.pdf
+batch/*
+*.mem
+__pycache__
+cysignals*
+*.svg
+*.ma

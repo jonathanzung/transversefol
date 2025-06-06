@@ -19,7 +19,7 @@ function PEnvelope()
     return Envelope{Eq,Float64,Cand{DiscreteHomeo}}()
 end
 
-function strict_compare(x::Vector{T},y::Vector{T}) where {T}
+function strict_compare(x::Vector{T},y::Vector{S}) where {S,T}
 	return all(x .<= y)
 end
 
@@ -51,7 +51,7 @@ mutable struct Crevice{N,T} #can also be thought of as an octant in space
     children::Vector{Crevice{N}}
 end
 function Crevice(faces::AbstractVector{SVector{N,T}}) where {N,T}
-    return Crevice{N}(MVector{N,SVector{N,T}}(faces), nothing, Crevice{N,T}[])
+    return Crevice{N,T}(MVector{N,SVector{N,T}}(faces), nothing, Crevice{N,T}[])
 end
 
 function contains(c::Crevice{N}, p::SVector{N,T}) where {N,T}
@@ -96,7 +96,7 @@ function all_leaves(c::Crevice{N}) where {N}
     return unique(collect(leaves(c)))
 end
 
-function crevices_general(e::Envelope{Upper})
+function crevices_general(e::Envelope{Upper,T}) where {T}
     N=length(e.A[1][1])
     c=Crevice([SVector{N,T}([(i==j ? -CLIP : CLIP) for j in 1:N]) for i in 1:N])
     for (x,_) in e.A
@@ -105,7 +105,7 @@ function crevices_general(e::Envelope{Upper})
     return [Vector{T}(x) for x in all_leaves(c)]
 end
 
-function crevices_general(e::Envelope{Lower})
+function crevices_general(e::Envelope{Lower,T}) where {T}
     N=length(e.A[1][1])
     c=Crevice([SVector{N,T}([(i==j ? -CLIP : CLIP) for j in 1:N]) for i in 1:N])
     for (x,_) in e.A
