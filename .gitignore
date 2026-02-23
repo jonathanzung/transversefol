@@ -5,3 +5,4 @@ __pycache__
 cysignals*
 *.svg
 *.ma
+identify/batch/*
