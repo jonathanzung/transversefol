@@ -30,7 +30,8 @@ function bdry(bt, A::DefaultDict{Track, T}; scale=x->one(T)) where {T}
     return ret
 end
 
-function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8) where {Hm} #i is which cusp to draw
+function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8, curve=nothing) where {Hm} #i is which cusp to draw
+    #curve is an ArrayDict giving weights of a curve to draw on the boundary.
     #weight should be a map from Tracks to displacement vectors
     #
     
@@ -106,35 +107,35 @@ function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8) wher
 
     end
 
-    function draw_edge(tr,basepoint)
+    function draw_edge(tr,basepoint) #draw a track, starting from a given basepoint
+        #=
         i1,J1 = bt.backward[tr]
-        for h in collect(filter(x->(i1//J1.right_len) <= x <= (i1+1)//J1.right_len, c[J1].right_heights))
-            draw_edge(tr, basepoint, h * J1.right_len - i1)
+        i2,J2 = bt.forward[tr]
+        left_heights = collect(filter(y->y[1] == i1, collect(x[inv(c[J1].dir)] for x in c[J1].ordering))) 
+        right_heights = collect(filter(y->y[1] == i2, collect(x[c[J2].dir] for x in c[J2].ordering))) 
+        for h in unique([h[2] for h in vcat(left_heights, right_heights)])
+        =#
+
+        if curve!=nothing
+            Luxor.setline(1+2*abs(curve[tr][1]))
+            draw_edge(tr,  basepoint, 0; roundmode=:mean)
+            Luxor.setline(2)
+        else
+            for h in heights(c, tr[1])
+                draw_edge(tr, basepoint, h;roundmode=:up)
+                draw_edge(tr, basepoint, h;roundmode=:down)
+            end
         end
     end
 
-
-    function draw_edge(tr,basepoint, height)
+    function draw_edge(tr,basepoint, height; roundmode=:mean)
         i1,J1 = bt.backward[tr]
         i2,J2 = bt.forward[tr]
 
-
-        height1 = (height+ i1) // J1.right_len
-        height2 = (height+ i2)//J2.left_len
-
-        #=
-        s=State(height * J1.right_len - i1,tr)
-        snext = trace_forwards(s, c)
-
-        i2,J2 = bt.backward[snext.e]
-        =#
-
-        #p1 = SCALEPT.*(basepoint) + ((s.x+i1)//J1.right_len -0.5)*vert_control(J1)
-        p1 = SCALEPT.*(basepoint) + (assign_height_right(c[J1], height1) -0.5)*vert_control(J1)
+        p1 = SCALEPT.*(basepoint) + (assign_height_right(c[J1], (i1,height); roundmode=roundmode) - 0.5)*vert_control(J1)
         p2 = p1 .+ control(J1)
 
-        #p4 = SCALEPT.*(basepoint + displacement[tr]) + ((snext.x+i2)//J2.right_len-0.5)*vert_control(J2)
-        p4 = SCALEPT.*(basepoint + displacement[tr]) + (assign_height_left(c[J2], height2)-0.5)*vert_control(J2)
+        p4 = SCALEPT.*(basepoint + displacement[tr]) + (assign_height_left(c[J2], (i2,height);roundmode=roundmode) - 0.5)*vert_control(J2)
         p3 = p4 .- control(J2)
 
         Luxor.move(p1)

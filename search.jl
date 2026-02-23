@@ -11,7 +11,6 @@ using Envelopes
 import Envelopes: Envelope
 #import Plots: plot
 
-includet("Homeos.jl")
 
 const CLIP = 25 #don't worry about any slopes of absolute value bigger than CLIP
 
@@ -20,17 +19,15 @@ const CLIP = 25 #don't worry about any slopes of absolute value bigger than CLIP
 const Track = Tuple{Int,Int} #edge index and vertex number
 const Slope = SVector{2,Int}
 const MultiSlope{N} = SVector{N,Slope} where N #todo: make all vector of slopes into multislopes
+abstract type Homeo end
 
 #make this mutable, so that we can do simulated annealing by updating the same struct over and over again.
 
-
-function Envelope()
-    return Envelope{Upper,Float64,Cand{DiscreteHomeo}}()
+struct State{T}
+	x::T#height in the edge
+	e::Track#which track we're on
 end
 
-function PEnvelope()
-    return Envelope{Eq,Float64,Cand{DiscreteHomeo}}()
-end
 struct Junction
 	index::Int
 	inv::Bool
@@ -90,15 +87,21 @@ struct BoundaryTriangulation
 	backward::ArrayDict{Track, Tuple{Int,Junction}, 2}
 	forwardfan::ArrayDict{Tuple{Int,Junction}, Track, 3} #leftward tracks
 	backwardfan::ArrayDict{Tuple{Int,Junction}, Track, 3} #rightward tracks
-	weights::ArrayDict{Track, Slope, 2}
 	junctions::Vector{Junction}#doesn't include mappings for inverses
-	firstrungs::Vector{Track}#one rung in each cusp
+
+    poles::Vector{Vector{Vector{Track}}} #for each cusp, and for each ladder, the poles
 	rungs::Vector{Vector{Vector{Track}}} #for each cusp, and for each ladder, the list of its rungs
 	alledges::Vector{Vector{Track}}#edges appearing in each cusp
+
+    zero_loops::Vector{Vector{Track}}#choice of slope zero in each cusp
+	weights::ArrayDict{Track, Slope, 2}#these are stored relative to the taut coorientation, not regina's coorientation
+	snappy_weights::ArrayDict{Track, Slope, 2}#these should also be stored relative to the taut coorientation. But these are dual weights, not weights
+
     ncusps::Int
+    ntets::Int
 	#fans is a list of pairs of fans
 	
-	function BoundaryTriangulation(fans, face_coorientations, firstrungs, alledges, rungs)
+	function BoundaryTriangulation(fans, face_coorientations, alledges, poles, rungs, meridian_dict, longitude_dict)
 		forward=Dict{Track, Tuple{Int,Junction}}()
 		backward=Dict{Track, Tuple{Int,Junction}}()
 
@@ -127,6 +130,15 @@ struct BoundaryTriangulation
 				backwardfan[(_j,J)] = ccwise(e,coor)
 			end
 		end
+        ntets = length(junctions) #every tet has a canonical upper edge
+        ncusps = length(rungs)
+
+        snappy_weights = Dict{Track,Slope}()
+        for l in alledges #iterate over cusps
+            for track in l #for track in that cusp
+                snappy_weights[track] = face_coorientations[track[1]] * Slope([meridian_dict[track], longitude_dict[track]])
+            end
+        end
 
 		weights=Dict{Track,Slope}()
 		for l in alledges
@@ -134,23 +146,53 @@ struct BoundaryTriangulation
 				weights[track] = Slope([0,0])
 			end
 		end
-		for l in rungs
-			for track in l[1] #only assign weight 1 to the first ladder.
-				weights[track] = Slope([1,0])
-			end
-		end
-        bt = new(ArrayDict(forward),ArrayDict(backward),ArrayDict(forwardfan),ArrayDict(backwardfan),ArrayDict(weights),junctions,firstrungs, rungs, alledges, length(rungs))
 
-		compute_vertical_weights!(bt)
+
+        zero_loops = Vector{Track}[]
+        bt = new(ArrayDict(forward),
+                 ArrayDict(backward),
+                 ArrayDict(forwardfan),
+                 ArrayDict(backwardfan),
+                 junctions,
+
+                 poles, 
+                 rungs, 
+                 alledges, 
+
+                 zero_loops,
+                 ArrayDict(weights),
+                 ArrayDict(snappy_weights), 
+
+                 ncusps, 
+                 ntets)
+
+		compute_weights!(bt)
 
 		return bt
 	end
 end
 
-
 struct Cand{S<:Homeo} #should it be mutable?
     bt::BoundaryTriangulation
     d::ArrayDict{Junction, S, 2}
+end
+
+function Base.show(io::IO, bt::BoundaryTriangulation)
+    print(io, "BoundaryTriangulation(...,ncusps=$(bt.ncusps),ntets=$(bt.ntets))")
+end
+function Base.show(io::IO, c::Cand{S}) where {S}
+    print(io, "Cand(...)")
+end
+
+
+includet("DiscreteHomeos.jl")
+
+function Envelope()
+    return Envelope{Upper,Float64,Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
+end
+
+function PEnvelope()
+    return Envelope{Eq,Float64,Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
 end
 
 function right_tracks(bt::BoundaryTriangulation, J::Junction)
@@ -162,11 +204,13 @@ function left_tracks(bt::BoundaryTriangulation, J::Junction)
     return (bt.forwardfan[(i,J)] for i in 0:J.left_len-1)
 end
 
+#=
 function show(io::IO, c::Cand)
     println(io, "Cand")
     println(io, "exact slope: $(exact_slope(c))")
     println(io, "rung percentage: $(rung_percentage(c))")
 end
+=#
 
 #=
 struct Optimistic <: Homeo
@@ -190,6 +234,7 @@ function (f::Optimistic)(y::T)
 end
 =#
 
+#=
 function random_ordering(left_heights, right_heights)
     if length(left_heights)==2
         return Dir[BOTH, Dir[RIGHT for i in 1:length(right_heights)-2]..., BOTH]
@@ -202,6 +247,7 @@ function random_ordering(left_heights, right_heights)
         return vcat(random_ordering(left_heights[1:k1], right_heights[1:k2])[1:end-1], random_ordering(left_heights[k1:end], right_heights[k2:end]))
     end
 end
+=#
 
 
 function cwise((fnum,edge_index)::Tuple{Int,Int}, coor::Int)
@@ -217,10 +263,6 @@ function Base.hash(J::Junction, h::UInt)
 end
 
 
-struct State{T}
-	x::T#height in the edge
-	e::Track#which track we're on
-end
 
 function inv(e::Junction)
 	return Junction(e.index,!e.inv,e.right_len,e.left_len)
@@ -235,6 +277,7 @@ function setindex!(c::Cand{H}, f::H, J::Junction) where {H}
 	c.d[inv(J)] = inv(f)
 end
 
+#=
 function (c::Cand)(J::Junction, x::Rational{Int})
 	@assert 0 <= x <= J.left_len
 	return c[J](x // J.left_len) * J.right_len
@@ -243,6 +286,11 @@ end
 function (c::Cand)(J::Junction, x)
 	@assert 0 <= x <= J.left_len
 	return c[J](x / J.left_len) * J.right_len
+end
+=#
+
+function (c::Cand)(J::Junction, x)
+    return c[J](x)
 end
 
 function set_roundmode(c::Cand{H}, r::RoundMode) where {H}
@@ -264,9 +312,13 @@ function subdivide(c::Cand{H}) where {H}
 end
 
 function set_roundmode(h::DiscreteHomeo, r::RoundMode)
-    return DiscreteHomeo(h.left_heights, h.right_heights, h.ordering, h.dir, r)
+    return DiscreteHomeo(h.ordering, h.dir, r)
+end
+function set_roundmode(h::DiscreteHomeo2, r::RoundMode)
+    return DiscreteHomeo2(h.ordering_l, h.ordering_r, r)
 end
 
+#=
 function subdivide(x::Vector{R}) where {R<: Rational}
     @assert length(x) >= 1
     y = R[]
@@ -277,16 +329,37 @@ function subdivide(x::Vector{R}) where {R<: Rational}
     end
     return y
 end
+=#
 
-function subdivide(h::DiscreteHomeo)
+function insert_left(h::DiscreteHomeo{T}, new) where {T}
 
-    o=Dir[]
-    push!(o, h.ordering[1])
+end
+
+function subdivide_left!(h::DiscreteHomeo{T}, old::T, new1::T, new2::T) where {T}
+    r = searchsortedfirst(f.ordering, (old,old), by=a->a[f.dir])
+
+    ind = rand(r)
+
+    for i in r.start:ind
+        h.ordering[i][f.dir] = new1
+    end
+    for i in ind:r.stop
+        h.ordering[i][f.dir] = new2
+    end
+    insert!(f.ordering, ind, (new2, h.ordering[ind]))
+
+    left = [x[1] for x in h.ordering]
+    right = [x[2] for x in h.ordering]
+    o=Tuple{Tuple{Int,Int},Tuple{Int,Int}}[]
     for k in 2:length(h.ordering)
         push!(o, h.ordering[k])
         push!(o, h.ordering[k])
     end
     return DiscreteHomeo(subdivide(h.left_heights), subdivide(h.right_heights), o, h.dir, h.roundmode)
+end
+
+function copy(c::Cand)
+    return Cand(c.bt, copy(c.d))
 end
 
 function jiggle(c::Cand{H}, r::T) where {H,T}
@@ -298,6 +371,7 @@ function jiggle(c::Cand{H}, r::T) where {H,T}
     return cnew
 end
 
+#=
 function jiggle(f::DiscreteHomeo, r::T) where {T}
     dir = copy(f.ordering)
 
@@ -323,6 +397,7 @@ function jiggle(f::DiscreteHomeo, r::T) where {T}
     end
     return DiscreteHomeo(f.left_heights, f.right_heights, dir, f.dir, f.roundmode)
 end
+=#
 
 #=
 function jiggle(c::Candidate, r::T)
@@ -365,6 +440,7 @@ end
 
 #junction_crossings=Dict()
 
+#=
 function trace_forwards(s::State{T}, c::Cand) where {T}
     #@show s.x
     #@show s.e
@@ -389,6 +465,7 @@ function trace_forwards(s::State{T}, c::Cand) where {T}
 
     return State{T}(fx-j, c.bt.backwardfan[(Int(j),J)])
 end
+=#
 
 #=
 function trace_backwards(s::State, bt::BoundaryTriangulation, c::Candidate)
@@ -401,7 +478,7 @@ end
 
 
 function random_cand(bt, thickness, roundmode)
-    d=Dict{Junction, DiscreteHomeo}()
+    d=Dict{Junction, DiscreteHomeo{Tuple{Int,Int}}}()
     for j in bt.junctions
         d[j] = random_discrete_homeo(j, thickness, roundmode)
         d[inv(j)] = inv(d[j])
@@ -410,6 +487,8 @@ function random_cand(bt, thickness, roundmode)
     return Cand(bt, ArrayDict(d))
 end
 
+
+#=
 function random_discrete_homeo(j::Junction, thickness::Int, roundmode::RoundMode)
     left_heights = Rational{Int}[i//(thickness * j.left_len) for i in 0:j.left_len * thickness]
     right_heights = Rational{Int}[i//(thickness * j.right_len) for i in 0:j.right_len * thickness]
@@ -417,6 +496,7 @@ function random_discrete_homeo(j::Junction, thickness::Int, roundmode::RoundMode
     ordering = random_ordering(left_heights, right_heights)
     return DiscreteHomeo(left_heights, right_heights, ordering, LEFT, roundmode)
 end
+=#
 function rung_percentage(c::Cand; time=500)
     return [rung_percentage(c,i; time=time) for i in 1:c.bt.ncusps]
 end
@@ -505,20 +585,24 @@ function show_trace(c::Cand{H}; time=50) where {H}
     end
 end
 
-rand_init(::Type{DiscreteHomeo}) = 0//1
-rand_init(::Type)=0.31432
+rand_init(::Type{H}) where {H<:DiscreteHomeo2} = 0//1 
+rand_init(c::Cand) = rand_init(typeof(c.d[c.bt.junctions[1]]))
+rand_init(::Type{DiscreteHomeo{T}}) where {T} = 1
+#rand_init(::Type{CompositeHomeo{H}}) where {H} = rand_init(H)
+#rand_init(::Type)=0.31432
 
 function slope(c::Cand{H}, i::Int; time=200) where {H}
-    w1,w2 = _slope(c, State(rand_init(H),  c.bt.rungs[i][1][1]), time=time)
+    w1,w2 = _slope(c, State(rand_init(c),  c.bt.rungs[i][1][1]), time=time)
 	if abs(w1)<=1
-		return NaN
+		#return NaN
+        return sign(w2)*CLIP
 	end
 	#@show w1,w2
 	return clip(w2/w1, CLIP)
 end
 
 function uncertain_slope(c::Cand{H}, i::Int; time=200) where {H}
-    w1,w2 = _slope(c, State(rand_init(H), c.bt.rungs[i][1][1]), time=time)
+    w1,w2 = _slope(c, State(rand_init(c), c.bt.rungs[i][1][1]), time=time)
 	if abs(w1)<=1
 		return NaN
 	end
@@ -528,7 +612,8 @@ end
 function exact_slope(c::Cand{H}, i::Int) where {H}
     w1, w2 = _exact_slope(c, State(rand_init(H),  c.bt.rungs[i][1][1]))
 	if w1==0
-		return NaN
+		#return NaN
+        return sign(w2)*CLIP
 	end
 	#@show w1,w2
 	return clip(w2/w1, CLIP)
@@ -560,6 +645,7 @@ function push!(e::Envelope, x::Cand)
 end
 
 
+#=
 function longitude_to_candidate(bt::BoundaryTriangulation, l)
     d=Dict{Junction, DiscreteHomeo}()
     for J in bt.junctions
@@ -622,6 +708,8 @@ function longitude_to_candidate(bt::BoundaryTriangulation, l)
 
     return Cand(bt, ArrayDict(d))
 end
+=#
+
 
 function slopes(l::Longitude)
 	tmp = [sum(l.weights[i]*l.bt.weights[(i,j)] for (i,j) in edgelist) for edgelist in l.bt.alledges]
@@ -651,7 +739,7 @@ end
 
 
 function objective(::Type{Upper}, slope, old_slope, target)
-	if any(map(isnan, slope))
+    if any(map(isnan, slope)) || any(map(isinf, slope))
 		return -100.0
 	end
 	@assert length(slope)==length(old_slope)==length(target)
@@ -663,7 +751,7 @@ function objective(::Type{Upper}, slope, old_slope, target)
 	#return sum(slope)
 end
 function objective(::Type{Lower}, slope, old_slope, target)
-	if hasnan(slope)
+    if any(map(isnan, slope)) || any(map(isinf, slope))
 		return -100.0
 	end
 	@assert length(slope)==length(old_slope)==length(target)
@@ -967,10 +1055,13 @@ function constraints(L::Longitude)
     chi = Int(-sum(L.weights)//2) #Euler characteristic of the punctured surface
 	#@show chi
 
+
 	npunctures = [gcd(a,b) for (a,b) in ss]
 	#@show npunctures
     closed_chi = chi + sum(npunctures)
 
+    @show chi
+    @show npunctures
 
 	#=
 	if closed_chi >= 0
@@ -1167,6 +1258,7 @@ function downward_ladderpole(bt::BoundaryTriangulation, J::Junction)
 end
 
 
+#=
 function trace_forwards(s::State{T}, c::Cand) where {T}
     #@show s.x
     #@show s.e
@@ -1191,9 +1283,11 @@ function trace_forwards(s::State{T}, c::Cand) where {T}
 
     return State{T}(fx-j, c.bt.backwardfan[(Int(j),J)])
 end
+=#
 
 
-function compute_loop(bt,rungs) #rungs is a list of rungs, all in the first ladder
+function compute_loop(bt,rungs) 
+    #rungs is a list of rungs, all in the first ladder. Returns a loop in that cusp, intersection number one with that ladder
 	S=Set{Track}(rungs)
 	Q=Queue{Vector{Track}}()
 	for rung in circshift(rungs,-1) #the second rung is the bottommost
@@ -1216,15 +1310,47 @@ function compute_loop(bt,rungs) #rungs is a list of rungs, all in the first ladd
 	@assert false #failed to find a loop
 end
 
-function compute_vertical_weights!(bt::BoundaryTriangulation)
-	for runglist in bt.rungs
-		loop = compute_loop(bt, runglist[1])
-		@show loop
+function compute_weights!(bt::BoundaryTriangulation)
+    for runglist in bt.rungs
+        push!(bt.zero_loops, compute_loop(bt, runglist[1]))
+    end
+
+    for l in bt.rungs
+        for track in l[1] #only assign weight 1 to the first ladder.
+            bt.weights[track] = Slope([1,0])
+        end
+    end
+
+	for loop in bt.zero_loops
+		#@show loop
 		weights = intersection_weights(bt, loop)
 		for (k,v) in weights
 			bt.weights[k] = Slope([bt.weights[k][1], v])
 		end
 	end
+
+
+end
+
+function degen_to_snappy_basis_change(bt::BoundaryTriangulation)
+    ret = Array{Int,2}[]
+    for i in 1:bt.ncusps
+        degen = bt.poles[i][1]
+        zero = bt.zero_loops[i]
+
+        
+        m1, l1 = sum(bt.snappy_weights[e] for e in zero)
+	    m2, l2 = sum(bt.snappy_weights[e] for e in degen)
+
+        push!(ret, Int[-l1 -l2; m1 m2])
+    end
+    @assert all(abs(det(A))==1 for A in ret)
+    
+    return ret
+end
+
+function snappy_to_degen_basis_change(bt::BoundaryTriangulation)
+    return Array{Int,2}[inv(A) for A in degen_to_snappy_basis_change(bt)]
 end
 
 #=
@@ -1342,7 +1468,7 @@ function n_orthogonal(v::AbstractVector{Int},A::Matrix{Int})
 end
 
 function constraint3(fiber_slope::Slope, chi::Int; verbose=false)
-    #@show r, s, chi
+    @show fiber_slope, chi
 
     g=gcd(fiber_slope...,chi)
     fiber_slope = Slope(fiber_slope .// g)
@@ -1432,9 +1558,6 @@ function components(L::Longitude)
 end
 =#
 
-function extend(c::Cand{DiscreteHomeo}, s::State)
-
-end
 
 
 #Improved setup

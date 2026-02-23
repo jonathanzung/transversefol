@@ -267,7 +267,7 @@ function find_longitudes_hom(fans, top_bot_pairs) #find longitudes by homology c
 	end
 
     @async begin
-        @threads :greedy for a in takewhile(x -> isopen(ch), 1:100) #Iterators.countfrom(0,1))
+        @threads :greedy for a in takewhile(x -> isopen(ch), 1:300) #Iterators.countfrom(0,1))
             search_interval(a)
         end
         close(ch)

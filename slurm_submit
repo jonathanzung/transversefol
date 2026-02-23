@@ -4,14 +4,15 @@
 #SBATCH -C centos7
 #SBATCH -N 1 #Request 1 node
 #SBATCH -t 0-06:00 #Request runtime of 30 minutes
-#SBATCH -p sched_mit_hill,newnodes,sched_any #Run on sched_engaging_default partition
+#SBATCH -p mit_normal,sched_mit_hill,newnodes,sched_any #Run on sched_engaging_default partition
 #SBATCH --mem-per-cpu=4000 #Request 4G of memory per CPU
-#SBATCH -o output_%j.txt #redirect output to output_JOBID.txt
-#SBATCH -e error_%j.txt #redirect errors to error_JOBID.txt
+#SBATCH -o output_%a.txt #redirect output to output_JOBID.txt
+#SBATCH -e error_%a.txt #redirect errors to error_JOBID.txt
 #SBATCH --mail-type=END #Mail when job starts and ends
 #SBATCH --mail-user=jzung@mit.edu #email recipient
-#SBATCH --array=31-35
+#SBATCH --array=11-11
 
 cd /home/jzung/transversefol
 echo "starting $SLURM_ARRAY_TASK_ID"
-JULIA_NUM_THREADS=8 /home/jzung/.juliaup/bin/julia -e "include(\"script.jl\"); runjob($SLURM_ARRAY_TASK_ID)" > "output_$SLURM_ARRAY_TASK_ID.txt"
+echo "$SLURM_JOB_CPUS_PER_NODE threads"
+JULIA_NUM_THREADS=$SLURM_JOB_CPUS_PER_NODE /home/jzung/.juliaup/bin/julia -e "include(\"script.jl\"); runjob($SLURM_ARRAY_TASK_ID, 2, rt=true, nlongs=500, reg=true, fromscratch=true, refresh=true)"

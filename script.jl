@@ -159,7 +159,7 @@ function compute_longitudes(bt, fans, top_bot_pairs; nlongs=100)
 end
 
 function latest_save(filename)
-    CUTOFF = Dates.datetime2unix(Dates.DateTime(2025,06,11,02,38))
+    CUTOFF = Dates.datetime2unix(Dates.DateTime(2026,02,22,00,00) + Hour(4))
 	locations=[]
     push!(locations, "/home/jonathan/Dropbox/jonathan/transversefol/batch/$(filename)")
     push!(locations, "/home/jonathan/engaging_sshfs/transversefol/batch/$(filename)")
@@ -205,21 +205,31 @@ function load(isosig::String; refresh=false, refresh_prep=false, nlongs=100)
 	if path==nothing || refresh_prep
 		println("batch/$(isosig).json not found, preparing it now")
 		flush(stdout)
-		run(`/home/jonathan/.py3env/bin/python3 prepare.py $(isosig)`)
+		#run(`/home/jonathan/.py3env/bin/python3 prepare.py $(isosig)`)
+		run(`/home/jonathan/miniconda3/envs/sage/bin/python3 prepare.py $(isosig)`)
 	end
 
 
     path = latest_save("$(isosig).jls")
 
-	if path == nothing || refresh || refresh_prep
         _prep = Dict{Symbol,Any}(Symbol(key)=>eval(Meta.parse(value)) for (key,value) in JSON.parsefile("batch/$(isosig).json"))
         _prep[:face_coorientations] = OffsetArrays.Origin(0)(_prep[:face_coorientations])
+        _prep[:meridian_dict] = Dict{Track,Int}(x=>y for (x,y) in _prep[:meridian_dict])
+        _prep[:longitude_dict] = Dict{Track,Int}(x=>y for (x,y) in _prep[:longitude_dict])
 
         prep = NamedTuple(_prep)
 
-        bt=BoundaryTriangulation(prep.fans, prep.face_coorientations, prep.firstrungs, prep.alledges, prep.rungs)	
+	if path == nothing || refresh || refresh_prep
 
-		ncusps = length(bt.firstrungs)
+        bt=BoundaryTriangulation(prep.fans, 
+                                 prep.face_coorientations, 
+                                 prep.alledges, 
+                                 prep.poles, 
+                                 prep.rungs, 
+                                 prep.meridian_dict, 
+                                 prep.longitude_dict)
+
+		ncusps = length(bt.rungs)
 
 
         function filternan(A::Vector{T}) where {T}
@@ -240,9 +250,9 @@ function load(isosig::String; refresh=false, refresh_prep=false, nlongs=100)
         save(tup)
 	else
         tup = (deserialize(path)..., isosig=isosig)
-        #=
+
 		if length(tup.longitudes) < nlongs
-			Elong, longitudes = compute_longitudes(tup.bt; nlongs=nlongs)
+            Elong, longitudes = compute_longitudes(tup.bt, prep.fans, prep.top_bot_pairs; nlongs=nlongs)
             for (x,c) in Elong.A
                 push!(tup.Eupper, (x,c))
                 push!(tup.Elower, (x,c))
@@ -250,7 +260,6 @@ function load(isosig::String; refresh=false, refresh_prep=false, nlongs=100)
 			tup = (tup...,longitudes=longitudes)
             save(tup)
 		end
-        =#
 	end
 	println("done setup")
 	flush(stdout)
@@ -265,7 +274,7 @@ function regimen(E::Envelope, target::Vector{T}; verbose=false) where {T<:Real}
 	#ncusps = length(E.A[1][1])
 		
 	println("phase 1")
-	E = try_improve(E; nsubdivide=0, iters=30000, time=1000, target=target, radius=0.001)
+	E = try_improve(E; nsubdivide=0, iters=30000, time=1000, target=target, radius=0.001, beta=500)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
@@ -277,12 +286,30 @@ function regimen(E::Envelope, target::Vector{T}; verbose=false) where {T<:Real}
 		add_trace!(p, _plotjs(E))
 	end
 	println("phase 3")
-	E = try_improve(E; nsubdivide=1, iters=1000000, time=2000, target=target, radius=0.001, beta=1600)
+	E = try_improve(E; nsubdivide=0, iters=1000000, time=2000, target=target, radius=0.001, beta=1600)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
 	end
 	return E
+end
+
+function runjob_closed(closed_isosig::String; kwargs...)
+    parts = split(closed_isosig, '_')
+    @assert length(parts)==3
+
+    isosig = parts[1] * "_" * parts[2]
+
+	tup = load(isosig, nlongs=0)
+
+    snappy_target = eval(Meta.parse(parts[3]))
+    local_target = [slope_to_rat(x*Slope(y)) for (x,y) in zip(snappy_to_degen_basis_change(tup.bt),snappy_target)]
+
+    #runjob(isosig; merge((;kwargs...,), (target=local_target,))...)
+	#tup = load(isosig, nlongs=0)
+    
+    @show local_target
+    println(Envelopes.inclosure(tup.Eupper, local_target) && Envelopes.inclosure(tup.Elower, local_target))
 end
 
 function runjob(i::Int; kwargs...)
@@ -293,10 +320,12 @@ function runjob(i::Int, ncusps::Int; kwargs...)
     runjob(VeeringCensus.lookup(i,ncusps); kwargs...)
 end
 
-function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=nothing, fromscratch=false, doprune=false, preprune=false, refresh=false, fix=false, verbose=false)
+function runjob(isosig::String; rt=0, thickness=24, ex=false, reg=false, nlongs=100, target=nothing, fromscratch=false, doprune=false, preprune=false, refresh=false, fix=false, verbose=false, bound=false, bound2=0, bound3=0, try_exclude = nothing)
 	tup = load(isosig, nlongs=nlongs, refresh=refresh)
     println("running $(tup.isosig)")
     index = VeeringCensus.index(isosig)
+
+    @show target
     #=
 	global p=quickview(tup; isosig=isosig)
 	if isinteractive() && verbose
@@ -304,7 +333,7 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 	end
     =#
 
-	ncusps = length(tup.bt.firstrungs)
+	ncusps = tup.bt.ncusps
 
 
 	Eupper = tup.Eupper
@@ -315,6 +344,224 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 		prune!(Elower)
 	end
 
+    if bound
+        Eupperbound = Envelope{Upper}(eltype(Eupper.A)[])
+        Elowerbound = Envelope{Lower}(eltype(Elower.A)[])
+
+
+        g1 = all_cands(tup.bt, UP)
+        @threads :greedy for c in g1
+            push!(Eupperbound, (exact_slope(c),c))
+		end
+
+        g2 = all_cands(tup.bt, DOWN)
+        @threads :greedy for c in g2
+            push!(Elowerbound, (exact_slope(c),c))
+		end
+        @show [x[1] for x in Eupperbound.A]
+        @show [x[1] for x in Elowerbound.A]
+
+
+        save((tup..., Eupperbound=Eupperbound, Elowerbound=Elowerbound))
+    end
+
+    if try_exclude != nothing
+        cand = basic_cand(tup.bt, DOWN)
+        #ch=Channel{Tuple{Cand,Int}}(Inf)
+        ch = []
+        push!(ch, (cand, 1))
+
+        i=0
+        while !isempty(ch)
+            if i%1000==0
+                @show (i,length(ch))
+            end
+            i+=1
+            (c,cusp) = pop!(ch)
+            cdown = c
+            cup = set_roundmode(c,UP)
+            x = exact_slope(cdown)
+            y = exact_slope(cup)
+            @assert all(x .<= y)
+            if i%1000000==0
+                display(draw(c,1))
+                display(draw(c,2))
+                @show x, y
+            end
+
+            if !(all(x .<= try_exclude .<= y))
+                continue
+            elseif x==y
+                println("found")
+                break
+            elseif x[cusp]==y[cusp]
+                push!(ch, (c, mod1(cusp+1, tup.bt.ncusps)))
+            else
+                s = State(0//1, c.bt.rungs[cusp][1][1])
+                while true
+                    l = splittings(c, s)
+                    if length(l) == 1
+                        c=l[1]
+                        s = trace_forwards(s,c)
+                    else
+                        for csplit in l
+                            push!(ch, (csplit, mod1(cusp+1, tup.bt.ncusps)))
+                        end
+                        @assert false
+                        break
+                    end
+                end
+            end
+        end
+        @show (i,length(ch))
+        println("excluded")
+    end
+
+    if bound3 > 0
+        cand = basic_cand(tup.bt, DOWN)
+        ch=Channel{Tuple{Cand,Int}}(Inf)
+        Elowertmp = Envelope{Lower, Any, Any}()
+        Euppertmp = Envelope{Upper, Any, Any}()
+
+        push!(ch, (cand, 1))
+
+        @threads :greedy for (c, cusp) in Iterators.take(ch,bound3)
+            cdown = c
+            cup = set_roundmode(c,UP)
+            x = exact_slope(cdown)
+            y = exact_slope(cup)
+            @assert all(x .<= y)
+
+            push!(Euppertmp, (x, cdown))
+            push!(Elowertmp, (y, cup))
+
+            if x==y
+                continue
+            elseif x[cusp]==y[cusp]
+                push!(ch, (c, mod1(cusp+1, tup.bt.ncusps)))
+            elseif !(Envelopes.inclosure(Euppertmp, y) && Envelopes.inclosure(Elowertmp, x))
+                s = State(0//1, c.bt.rungs[cusp][1][1])
+                while true
+                    l = splittings(c, s)
+                    if length(l) == 1
+                        c=l[1]
+                        s = trace_forwards(s,c)
+                    else
+                        for csplit in l
+                            push!(ch, (csplit, mod1(cusp+1, tup.bt.ncusps)))
+                        end
+                        break
+                    end
+                end
+            end
+        end
+        Eupperbound = Envelope{Upper}(copy(Euppertmp.A))
+        Elowerbound = Envelope{Lower}(copy(Elowertmp.A))
+
+        @threads :greedy for (c, cusp) in ch
+            cdown = c
+            cup = set_roundmode(c,UP)
+
+            push!(Eupperbound, (exact_slope(cup), cup))
+            push!(Elowerbound, (exact_slope(cdown), cdown))
+            if isempty(ch)
+                close(ch)
+            end
+        end
+        @show [x[1] for x in Eupperbound.A]
+        @show [x[1] for x in Elowerbound.A]
+
+
+        save((tup..., Elower=Elowertmp, Eupper=Euppertmp, Eupperbound=Eupperbound, Elowerbound=Elowerbound))
+    end
+
+    if bound2 > 0
+        cand = basic_cand(tup.bt, DOWN)
+
+        current = [cand]
+
+        Elowertmp = Envelope{Lower, Any, Any}()
+        Euppertmp = Envelope{Upper, Any, Any}()
+                
+        for it in 0:bound2
+            @show it
+            for j in 1:tup.bt.ncusps
+                next = []
+                for c in current
+                    _s = State(0//1, c.bt.rungs[j][1][1])
+                    s=_s
+                    verify_low(s,c,it-1)
+                    for x in 1:it
+                        s = trace_forwards(s,c)
+                    end
+
+                    #let's try to extend this state
+                    for cnew in splittings(c,s)
+                        verify_low(_s,cnew,it)
+                        push!(next, cnew)
+                    end
+                end
+                current = next
+
+
+
+                g1 = current
+                g2 = [set_roundmode(c,UP) for c in current]
+
+                @threads :greedy for c in g1
+                    push!(Euppertmp, (exact_slope(c),c))
+                end
+
+                @threads :greedy for c in g2
+                    push!(Elowertmp, (exact_slope(c),c))
+                end
+
+                @show length(current)
+                filter!(c-> begin
+                                     x = exact_slope(c)
+                                     y = exact_slope(set_roundmode(c,UP))
+                                     @assert all(x .<= y)
+                                     !(Envelopes.inclosure(Euppertmp, y) && Envelopes.inclosure(Elowertmp, x))
+                                 end, current)
+                @show length(current)
+            end
+        end
+
+        Eupperbound = Envelope{Upper}(copy(Euppertmp.A))
+        Elowerbound = Envelope{Lower}(copy(Elowertmp.A))
+
+        g2 = current
+        g1 = [set_roundmode(c,UP) for c in current]
+
+        @threads :greedy for c in g1
+            push!(Eupperbound, (exact_slope(c),c))
+		end
+
+        @threads :greedy for c in g2
+            push!(Elowerbound, (exact_slope(c),c))
+		end
+        @show [x[1] for x in Eupperbound.A]
+        @show [x[1] for x in Elowerbound.A]
+
+
+        save((tup..., Elower=Elowertmp, Eupper=Euppertmp, Eupperbound=Eupperbound, Elowerbound=Elowerbound))
+    end
+
+	if rt>0
+		randE = random_trials(tup.bt,ntrials=rt,thickness=thickness, roundmode=DOWN)
+        #todo: multithread this
+		@threads for (x,c) in randE.A
+            push!(Eupper, (x,c))
+		end
+
+		randE = random_trials(tup.bt,ntrials=rt,thickness=thickness, roundmode=UP)
+		@threads for (x,c) in randE.A
+            push!(Elower, (x,c))
+        end
+
+        save((tup..., Eupper=Eupper, Elower=Elower))
+	end
+
 	if reg
 		Eupper = regimen(Eupper, [CLIP for i in 1:ncusps]; verbose=verbose)
         save((tup..., Eupper=Eupper, Elower=Elower))
@@ -323,7 +570,7 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 	end
 
     if target == :gaps
-        Econstr_lower, Econstr_upper = obstructions(tup; isosig=isosig)
+        Econstr_lower, Econstr_upper = obstructions(tup)#; isosig=isosig)
         Econstr_lower::Envelope{Lower}
         Econstr_upper::Envelope{Upper}
 
@@ -402,20 +649,6 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 		end
 	end
 
-	if rt>0
-		randE = random_trials(tup.bt,ntrials=rt,thickness=24, roundmode=DOWN)
-        #todo: multithread this
-		@threads for (x,c) in randE.A
-            push!(Eupper, (x,c))
-		end
-
-		randE = random_trials(tup.bt,ntrials=rt,thickness=24, roundmode=UP)
-		@threads for (x,c) in randE.A
-            push!(Elower, (x,c))
-        end
-
-        save((tup..., Eupper=Eupper, Elower=Elower))
-	end
 
 	if doprune
 		prune!(Eupper)
@@ -428,7 +661,7 @@ function runjob(isosig::String; rt=0, ex=false, reg=false, nlongs=100, target=no
 	end
     PlotlyJS.savefig(p, "batch/$(isosig).html")
     PlotlyJS.savefig(p, "batch/$(index).html")
-    save((tup..., Eupper=Eupper, Elower=Elower))
+    #save((tup..., Eupper=Eupper, Elower=Elower))
     println("done job")
 	flush(stdout)
 end
@@ -454,6 +687,10 @@ end
 
 function viewladderpole(i::Int, ncusps::Int)
     run(`evince batch/$(VeeringCensus.lookup(i,ncusps)).pdf`)
+end
+
+function viewladderpole(isosig::String)
+    run(`evince batch/$(isosig).pdf`)
 end
 
 function quickview(i::Int, ncusps::Int)
@@ -630,8 +867,8 @@ function quickview(tup::NamedTuple)
 
 
     Econstr = PEnvelope()
-    Econstr_upper = Envelope{Upper,Float64,Cand{DiscreteHomeo}}()
-    Econstr_lower = Envelope{Lower,Float64,Cand{DiscreteHomeo}}()
+    Econstr_upper = Envelope{Upper,Float64,Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
+    Econstr_lower = Envelope{Lower,Float64,Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
     longitudeDF = DataFrame()
     constrDF = DataFrame()
     long_slopes = []
@@ -745,6 +982,10 @@ function quickview(tup::NamedTuple)
         addtraces!(p, _plotjs(Elower, Eupper, name="Z (foliated region)")...)
     end
 
+    if haskey(tup, :Elowerbound)
+        addtraces!(p, _plotjs(tup.Elowerbound, tup.Eupperbound, name="bound")...)
+    end
+
     if length(Econstr_lower.A) > 0
         addtraces!(p, _plotjs(Econstr_lower, Envelope{Upper}([([CLIP for i in 1:ncusps], nothing)]), color=OBSTRUCTION_COLOUR, name="obstructions")...)
     end
@@ -810,6 +1051,16 @@ function quickview(tup::NamedTuple)
             end
 
             println(rationalize.(coords))
+
+            for l in sort(tup.longitudes, by=sum)
+                L=Longitude(tup.bt,l)
+
+                ss=slopes(L)
+                if rationalize.(coords)==map(slope_to_rat, ss)
+                    println(constraints(L))
+                end
+            end
+
 
             for (s,cand) in Iterators.flatten([tup.Elong.A, tup.Eupper.A, tup.Elower.A])
                 if s == coords
@@ -968,11 +1219,12 @@ function reapstat(indices, ncusps::Int)
 end
 
 function run_profile()
-    runjob(1, reg=true, rt=0, nlongs=2, refresh=true)
+    runjob(1,2, reg=true, rt=0, nlongs=2, refresh=true)
     Profile.Allocs.clear()
     Profile.init(n = 10^7, delay = 0.01)
-    Profile.Allocs.@profile sample_rate=0.0001 runjob(1, reg=true, rt=0, nlongs=100, refresh=true)
-    PProf.Allocs.pprof()
+    #Profile.Allocs.@profile sample_rate=0.0001 runjob(1, 2, reg=true, rt=0, nlongs=15, refresh=true)
+    #PProf.Allocs.pprof()
+    @profile runjob(1,2, reg=true, rt=0, nlongs=20, refresh=true)
 end
 
 function aggregate_bounds(X)
@@ -1177,12 +1429,6 @@ function dump_extremal(isosig)
 end
 
 #bad_examples = [38, 95, 160, 214, 278, 338, 356, 370, 406, 448, 453, 470, 473, 485]
-#
-#
-#
-#
-#
-
 
 
 #For L6a5:

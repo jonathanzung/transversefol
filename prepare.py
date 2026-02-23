@@ -3,26 +3,39 @@ sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering/scripts")
 sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering")
 
 import veering
+from veering import file_io
 import regina
 import veering.veering_tri
 import veering.taut as taut
 import veering.transverse_taut
-#import sage
 import numpy as np
 import ast
 import json
-
+import snappy
+from snappy.snap import t3mlite as t3m
+from snappy.snap.peripheral import link, dual_cellulation
+from collections import defaultdict
+from collections import Counter
+import itertools
+import boundary_triangulation
+import ast
+import time
 
 sys.set_int_max_str_digits(0)
-import boundary_triangulation
 
-
-from veering import file_io
 
 #veering_knots_with_data = file_io.parse_data_file("knot_hom_census_with_data.txt")
 
-"""
+def sign(perm):
+	l=4
+	ret = 1
+	for i in range(4):
+		for j in range(i+1, 4):
+			if perm[j] > perm[i]:
+				ret = -ret
+	return ret
 
+"""
 degen = bun2.degeneracy_slopes()
 fibre = bun2.fibre_slopes()
 find_s3_slope(M)
@@ -50,9 +63,145 @@ tri=regina.SnapPeaTriangulation(s)
 angle=[1 for i in range(M.num_tetrahedra())] #flipper arranges that all the tetrahedra are flattened in the same way
 """
 
+def btpoles(bt):
+	return [ttpoles(tt) for tt in bt.torus_triangulation_list]
+
+def ttpoles(tt):
+	return [list(set([a for lu in L.ladder_unit_list for a in pole_labels(lu)])) for L in tt.ladder_list]
+
+def pole_labels(lu):
+	if lu.is_on_left():
+		assert len(lu.right_vertices)==1
+		return [face_label(lu,v) for v in list(lu.right_vertices)]
+	else:
+		return []
+		#assert len(lu.left_vertices)==1
+		#return [face_label(lu,v) for v in list(lu.left_vertices)]
+
+def btrungs(bt):
+	return [ttrungs(tt) for tt in bt.torus_triangulation_list]
+
+def ttrungs(tt):
+    return [list(set([a for lu in L.ladder_unit_list for a in rung_labels(lu)])) for L in tt.ladder_list]
+
+def rung_labels(lu):
+	if lu.is_on_left():
+		return [face_label(lu,v) for v in list(lu.left_vertices)]
+	else:
+		return [face_label(lu,v) for v in list(lu.right_vertices)]
+
+def face_label(lu, face_num):
+	tet = lu.vt.tri.tetrahedron( lu.tet_num )
+	triangle = tet.triangle(face_num)
+	vert = tet.vertex(face_num)
+	triangle_num = triangle.index()
+
+	#names of the vertices of this cusp triangle
+	vertex_names = list(lu.verts_C.keys()) 
+	#missing_vertex is the vertex at this cusp
+	missing_vertex = [x for x in range(4) if not x in lu.verts_C.keys()]
+	face_index=tet.faceMapping(2,face_num).inverse()[missing_vertex[0]]
+	return (triangle_num, face_index)
+
+
+def tt_all_edges(tt):
+	return list(set(a for L in tt.ladder_list for lu in L.ladder_unit_list for a in all_labels(lu)))
+
+def bt_all_edges(bt):
+	return [tt_all_edges(tt) for tt in bt.torus_triangulation_list]
+
+
+def all_labels(lu):
+	return [face_label(lu,v) for v in list(lu.left_vertices) + list(lu.right_vertices)]
+
+
+def get_peripheral_weights(isosig):
+	tri, angle = taut.isosig_to_tri_angle(isosig)
+	assert tri.isOriented() #important so that snappy doesn't change these orientations
+
+	M=snappy.Triangulation(tri)
+	cusp_indices, data = M._get_cusp_indices_and_peripheral_curve_data()
+
+	#print(M._to_string())
+
+	#cusp_indices tells you which cusp each vertex lives in
+
+	ncusps = M.num_cusps()
+	ntets = M.num_tetrahedra()
+	assert len(data)==ntets*4
+	assert len(cusp_indices)==ntets
+
+	for row in data:
+		for j in range(4):
+			assert row[4*j+j]==0
+
+	#see cython/core/triangulation.pyx
+	#The rows congruent to 0 mod 4 are meridian
+	# 1 mod 4 are left handed meridian
+	# 2 mod 4 are longitude
+	# 3 mod 4 are left handed longitude
+
+	meridian_data = [data[i] for i in range(0, len(data), 4)]
+	longitude_data = [data[i] for i in range(2, len(data), 4)]
+
+	meridian_dict=defaultdict(lambda: 0)
+	longitude_dict=defaultdict(lambda: 0)
+
+	#print("ntets", len(tri.tetrahedra()))
+	for tet in tri.tetrahedra():
+		assert len(meridian_data[tet.index()])==16
+		assert len(longitude_data[tet.index()])==16
+		assert sum(meridian_data[tet.index()])==0
+		assert sum(longitude_data[tet.index()])==0
+		for v in range(4):
+			#check that at each face of the cusp triangulation, the number
+			#of times the meridian enters equals the number of times it exits
+			assert sum([meridian_data[tet.index()][4*v+f] for f in range(4)])==0
+			assert sum([longitude_data[tet.index()][4*v+f] for f in range(4)])==0
+		for v in range(4):
+			for f in range(4):
+				if v != f:
+					#we want to get the fth face of this tetrahedron
+					find = tet.triangle(f).index()
+					#print(tet.triangle(f).embeddings())
+					#print(tet.triangleMapping(f))
+					k = tet.triangleMapping(f).inverse()[v]
+					assert tet.triangleMapping(f)[3]==f
+					assert tet.triangleMapping(f)[k]==v
+					assert k in [0,1,2]
+					#check which way the orientation is going
+					orient = sign(tet.triangleMapping(f))
+
+					if orient == 1:
+						meridian_dict[(find,k)]=meridian_data[tet.index()][4*v + f]
+						longitude_dict[(find,k)]=longitude_data[tet.index()][4*v + f]
+				else:
+					assert meridian_data[tet.index()][4*v+f]==0
+					assert longitude_data[tet.index()][4*v+f]==0
+	
+	for tet in tri.tetrahedra():
+		for v in range(4):
+			tmp_merid = 0
+			tmp_long = 0
+			for f in range(4):
+				if v != f:
+					k = tet.triangleMapping(f).inverse()[v]
+					find = tet.triangle(f).index()
+					tmp_merid += sign(tet.triangleMapping(f)) * meridian_dict[(find,k)]
+					tmp_long += sign(tet.triangleMapping(f)) * longitude_dict[(find,k)]
+			assert tmp_merid == 0
+			assert tmp_long == 0
+	
+		
+	return ([(key,val) for key,val in meridian_dict.items()], [(key,val) for key,val in longitude_dict.items()])
+
+def intersection_number(x,y):
+	return x[0]*y[1] - x[1] * y[0]
+
 def flatten(lists):
 	return [x for l in lists for x in l]
 
+"""
 def find_longitudes(vt):
 	fans = veering.transverse_taut.edge_side_face_collections(vt.tri,vt.angle)
 
@@ -81,22 +230,29 @@ def find_longitudes(vt):
 		p.add_constraint(w[i]<= 100)
 	
 	print(p.polyhedron().integral_points())
+"""
 
 
-def prepare_example(vt, isosig="test", longitude=None):
+def prepare_example(vt, isosig="test", longitude=None, draw_bt=False):
 	info_file = open("batch/" + isosig + ".txt",'w')
 
 	fname = "batch/" + isosig + ".pdf"
 	fans = veering.transverse_taut.edge_side_face_collections(vt.tri,vt.angle)
 	face_coorientations=veering.transverse_taut.convert_tetrahedron_coorientations_to_faces(vt.tri,vt.coorientations)
-	print("fans=" + str(fans), file=info_file)
-	print("face_coorientations=OffsetArrays.Origin(0)(" + str(face_coorientations) + ")", file=info_file)
+	#print("fans=" + str(fans), file=info_file)
+	#print("face_coorientations=OffsetArrays.Origin(0)(" + str(face_coorientations) + ")", file=info_file)
 
 	args = {'style':'ladders', 'draw_boundary_triangulation':True, 'draw_triangles_near_poles': False, 'ct_depth':-1, 'ct_epsilon':0.03, 'global_drawing_scale': 4, 'delta': 0.2, 'ladder_width': 10.0, 'ladder_height': 30.0, 'draw_labels': True}
 	
 	bt=boundary_triangulation.generate_boundary_triangulation(vt.tri,vt.angle,args=args)
-	bt.generate_canvases(args=args)#this does some important setup...
-	bt.draw(fname,args=args)
+	for tt in bt.torus_triangulation_list:
+		for L in tt.ladder_list:
+			L.ladder_origin = complex(0,0)
+			L.calc_verts_C(args=args)
+	
+	if draw_bt:
+		bt.generate_canvases(args=args)#this does some important setup... I think the for loop above does the same
+		bt.draw(fname,args=args)
 
 	"""
 	for tt in bt.torus_triangulation_list:
@@ -118,14 +274,18 @@ def prepare_example(vt, isosig="test", longitude=None):
 			weights[rung][0]=1
 	"""
 	
-	first_rungs = [runglist[0][0] for runglist in bt.rungs()]
-	rungs = bt.rungs()
-	alledges = bt.all_edges()
+	rungs = btrungs(bt)
+	alledges = bt_all_edges(bt)
+	poles = btpoles(bt)
+
+
+	"""
 	print("firstrungs = " + str(first_rungs), file=info_file)
 
-	print("rungs = " + str(bt.rungs()), file=info_file)
+	print("rungs = " + str(btrungs(bt)), file=info_file)
 
-	print("alledges = " + str(bt.all_edges()), file=info_file)
+	print("alledges = " + str(bt_all_edges(bt)), file=info_file)
+	"""
 
 	"""
 	print("weights=[", file=info_file)
@@ -136,11 +296,31 @@ def prepare_example(vt, isosig="test", longitude=None):
 
 	top_bot_embeddings = veering.transverse_taut.top_bottom_embeddings_of_faces(vt.tri, vt.angle, vt.coorientations)
 	top_bot_pairs = [(x.simplex().index(),y.simplex().index()) for (x,y) in zip(*top_bot_embeddings)]
+	meridian_dict, longitude_dict= get_peripheral_weights(isosig)
+	
+	mdict = dict(meridian_dict)
+	ldict = dict(longitude_dict)
+	
 
-	print("top_bot_pairs = " + str(top_bot_pairs), file=info_file)
+	"""
+	for cusp in poles:
+		for pole in cusp:
+			#print(pole)
+			print(sum([face_coorientations[e[0]]*mdict[e] for e in pole]),sum([face_coorientations[e[0]]*ldict[e] for e in pole]))
+		print()
+	print("---")
+	"""
+
+	degeneracy = [
+			(-sum(face_coorientations[e[0]]*ldict[e] for pole in cusp[::2] for e in pole), #intersection with the longitude tells you how many meridians
+			sum(face_coorientations[e[0]]*mdict[e] for pole in cusp[::2] for e in pole))
+	for cusp in poles
+	]
+	#print("top_bot_pairs = " + str(top_bot_pairs), file=info_file)
 
 	#find_longitudes(vt)
 
+	"""
 	if longitude is not None:
 		l=[0 for i in range(vt.tri.countTriangles())]
 		for i,j in longitude: #i is a tetrahedron number, j is the face index
@@ -149,28 +329,41 @@ def prepare_example(vt, isosig="test", longitude=None):
 	else:
 		print("longitude=nothing", file=info_file)
 	info_file.close()
+	"""
+
+
+	d = {"fans": fans, 
+		"face_coorientations": face_coorientations,
+		"poles": poles,
+		"rungs": rungs,
+		"alledges": alledges,
+		"top_bot_pairs": top_bot_pairs,
+		#"preferred_longitude": "nothing" if longitude == None else str(longitude),
+		"meridian_dict": meridian_dict,
+		"longitude_dict": longitude_dict,
+		"degeneracy": degeneracy,
+		}
+	if len(isosig.split("_")) >= 3:
+		filling_slopes = ast.literal_eval(isosig.split("_")[2])
+		#print(filling_slopes)
+		assert len(filling_slopes) == len(degeneracy)
+		d["prong_counts"] = [abs(intersection_number(a,b)) for a,b in zip(filling_slopes, degeneracy)]
 
 	info_file = open("batch/" + isosig + ".json",'w')
-	json.dump({"fans": str(fans), 
-		"face_coorientations": str(face_coorientations),
-		"firstrungs": str(first_rungs),
-		"rungs": str(rungs),
-		"alledges": str(alledges),
-		"top_bot_pairs": str(top_bot_pairs),
-		"preferred_longitude": "nothing" if longitude == None else str(longitude)
-		},
+	json.dump(dict((k,str(v)) for k,v in d.items()),
 		info_file, indent=4)
 	info_file.close()
+	return d 
 	
 
-def prepare_by_isosig(isosig):
+def prepare_by_isosig(isosig, draw_bt=False):
 	x = taut.isosig_to_tri_angle(isosig)
-	v= veering.veering_tri.veering_triangulation(*x)
-	prepare_example(v, isosig = isosig)
+	v = veering.veering_tri.veering_triangulation(*x)
+	return prepare_example(v, isosig = isosig, draw_bt=draw_bt)
 
 if __name__ == "__main__":
 	if False:
-		n=3
+		n=2
 		N=500
 		veering_census_with_data = file_io.parse_data_file("veering_census_with_data.txt")
 		f=open(f"batch/{n}cusp_manifest.txt","w")
@@ -197,7 +390,7 @@ if __name__ == "__main__":
 		f.close()	
 		f2.close()
 
-	prepare_by_isosig("eLMkbcddddedde_2100")
+	#prepare_by_isosig("eLMkbcddddedde_2100")
 	#prepare_by_isosig("gvLQQcdeffeffffaafa_201102")
 	#prepare_by_isosig("gLLAQcdecfffhsermws_122201")
 	#prepare_by_isosig("fLLQcbecdeepuwsua_20102")	
@@ -211,5 +404,7 @@ if __name__ == "__main__":
 	#prepare_by_isosig("iLLAMMccdecffghhhsermstqs_12220120")
 	#prepare_by_isosig("jLLLzQQbeeeghihiixxaavvvvcv_211120000")
 	#prepare_by_isosig("iLLLQPcbeegefhhhhhhahahha_01110221")
+	#get_peripheral_weights("gLLAQcdecfffhsermws_122201")
+	prepare_by_isosig("ivvPQQcfhghgfghfaaaaaaaaa_01122000", draw_bt=True)
 	for isosig in sys.argv[1:]:
 		prepare_by_isosig(isosig)
