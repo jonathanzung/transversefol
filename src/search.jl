@@ -4,6 +4,7 @@ using DataStructures
 using Profile
 #using ProfileView
 using Base.Threads
+using Logging
 using Measurements
 using StaticArrays
 using LinearAlgebra
@@ -188,11 +189,11 @@ end
 include("DiscreteHomeos.jl")
 
 function Envelope()
-    return Envelope{Upper,Float64,Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
+    return Envelope{Upper,Rational{Int},Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
 end
 
 function PEnvelope()
-    return Envelope{Eq,Float64,Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
+    return Envelope{Eq,Rational{Int},Cand{DiscreteHomeo{Tuple{Int,Int}}}}()
 end
 
 function right_tracks(bt::BoundaryTriangulation, J::Junction)
@@ -593,12 +594,7 @@ rand_init(::Type{DiscreteHomeo{T}}) where {T} = 1
 
 function slope(c::Cand{H}, i::Int; time=200) where {H}
     w1,w2 = _slope(c, State(rand_init(c),  c.bt.rungs[i][1][1]), time=time)
-	if abs(w1)<=1
-		#return NaN
-        return sign(w2)*CLIP
-	end
-	#@show w1,w2
-	return clip(w2/w1, CLIP)
+	return w2/w1
 end
 
 function uncertain_slope(c::Cand{H}, i::Int; time=200) where {H}
@@ -606,25 +602,14 @@ function uncertain_slope(c::Cand{H}, i::Int; time=200) where {H}
 	if abs(w1)<=1
 		return NaN
 	end
-	return clip(measurement(w2,1)/w1, CLIP)
+	return measurement(w2,1)/w1
 end
 
 function exact_slope(c::Cand{H}, i::Int) where {H}
     w1, w2 = _exact_slope(c, State(rand_init(H),  c.bt.rungs[i][1][1]))
-	if w1==0
-		#return NaN
-        return sign(w2)*CLIP
-	end
-	#@show w1,w2
-	return clip(w2/w1, CLIP)
+	return w2//w1
 end
 
-function clip(x, bounds)
-	ret = max(min(x, bounds), -bounds)
-	@assert !isnan(ret)
-	@assert !isinf(ret)
-	return ret
-end
 
 
 function hasnan(s)
@@ -737,6 +722,19 @@ function relu(x)
 	max(x,0)
 end
 
+#A simple objective for a single target
+function objective2(::Type{Upper}, slope::AbstractVector{T}, target::AbstractVector{T}) where {T}
+	if any(map(isnan, slope)) || any(map(isinf, slope))
+		return -100*one(T)
+	end
+	return minimum(slope .- target)
+end
+function objective2(::Type{Lower}, slope::AbstractVector{T}, target::AbstractVector{T}) where {T}
+	if any(map(isnan, slope)) || any(map(isinf, slope))
+		return -100*one(T)
+	end
+	return minimum(target .- slope)
+end
 
 function objective(::Type{Upper}, slope, old_slope, target)
     if any(map(isnan, slope)) || any(map(isinf, slope))
@@ -830,12 +828,94 @@ function Mannealing(f, initial, _jiggle, betastart, betafinish, nsteps; verbose=
 end
 =#
 
-#annealing with a population of candidates
-function pop_annealing(f, initial, jiggle, beta, nsteps; verbos=true, minacc = 100, maxacc = 5000)
-    current = initial
-    curracc = minacc
-    currval = f(current; acc=curracc)
+function is_less(x::Measurement{T}, y::Real) where {T<:Real}
+	 if x.val + x.err < y
+		return true
+	 elseif x.val - x.err > y
+		return false
+	 else
+		return nothing
+	 end
+end
 
+function is_greater(x::Measurement{T}, y::Real) where {T<:Real}
+	 if x.val - x.err > y
+		return true
+	 elseif x.val + x.err < y
+		return false
+	 else
+		return nothing
+	 end
+end
+
+#annealing with a population of candidates
+#maintain a population of candidates
+#Maintain a list of top candidates so far, and restart from these from time to time.
+
+function population_annealing(initial_cands, objective, jiggle; iters=50000, pool_size=5, betastart=500, betafinish=500, n_walks=10, approx_objective=objective)
+    pool = sort([(objective(c), c) for c in initial_cands], by=x->-x[1])[1:min(pool_size, length(initial_cands))]
+    pool_lock = SpinLock()
+
+	@threads for _ in 1:n_walks
+        _, curr = pool[1]#initialize
+        lock(pool_lock) do
+            pool_index = rand(1:length(pool))
+            _, curr = pool[pool_index]
+        end
+		currval = approx_objective(curr)
+		oldval, old = currval, curr
+        bestval, best = currval, curr
+        accept_count = 0
+        reject_count = 0
+
+        for i in 1:iters
+            currbeta = betastart * (betafinish/betastart)^(i / iters)
+            jig    = jiggle(curr)
+            jigval = approx_objective(jig)
+
+            r    = rand()
+            dE   = exp(currbeta * (currval - jigval))
+            prob = 1 / (1 + dE) #This is the probability to accept the jump
+
+            if r < prob
+                currval, curr = jigval, jig
+                accept_count += 1
+                if currval >= bestval
+					bestval, best = currval, curr
+				end
+            else
+                reject_count += 1
+            end
+        end
+
+		exact_bestval = objective(best)
+		lock(pool_lock) do
+			#insert into the first index we find whose value is not worse than ours.
+			for i in shuffle(1:pool_size)
+				poolval, _ = pool[i]
+				if exact_bestval >= poolval
+					pool[i] = (exact_bestval, best)
+					break
+				end
+			end
+	    end
+
+		accept_frac = accept_count/(accept_count+reject_count)
+		@info "walk stats" oldval bestval accept_frac
+	    end
+    return [x[2] for x in pool]
+end
+
+#New strategy for try_improve
+#We will maintain a list of crevices.
+#At each crevice, we try to improve there.
+#Each thread randomly chooses a crevice, and then tries to improve there.
+function try_improve!(E::Envelope{S,T,D}, candidates; targets=[], radius=0.2,kwargs...) where {S,T,D}
+	@showprogress desc="Improving envelope" @threads for target in targets
+		for cand in population_annealing(candidates, cand->objective2(S,exact_slope(cand),target), c->jiggle(c,radius); kwargs...)
+			push!(E, (exact_slope(cand), cand))
+		end
+	end
 end
 
 function annealing(f, initial, jiggle, betastart, betafinish, nsteps; verbose=true, minacc = 100, maxacc = 5000)
@@ -843,6 +923,8 @@ function annealing(f, initial, jiggle, betastart, betafinish, nsteps; verbose=tr
 	current = initial
 	curracc = minacc
 	currval = f(current; acc=curracc)
+	best = current
+	best_val = currval
 	reject_count = 0
 	accept_count = 0
 
@@ -868,6 +950,10 @@ function annealing(f, initial, jiggle, betastart, betafinish, nsteps; verbose=tr
 			currval = newval
 			curracc = newacc
 			accept_count += 1
+			if newval > best_val
+				best_val = newval
+				best = current
+			end
 		elseif (curracc >= maxacc && newacc >= maxacc)
 			println("not enough accuracy")
 			@show prob, dE
@@ -897,12 +983,12 @@ function annealing(f, initial, jiggle, betastart, betafinish, nsteps; verbose=tr
 		end
 	end
 	@show (accept_count, reject_count)
-	return current
+	return best
 end
 
-function try_improve(E::Envelope{S,T,D}; nsubdivide=0, iters=50000, time=1000, target = [1000,1000], beta=500, radius=0.001, min_cands=3) where {S,T,D}
+function try_improve(E::Envelope{S,T,D}; nsubdivide=0, iters=50000, time=1000, target = [1000,1000], beta=500, radius=0.2, n_restarts=1, min_cands=3) where {S,T,D}
 	accurate_E=Envelope{S,T,D}()
-    
+
     cands = sort([(objective(S, x[1], x[1], target), x[2]) for x in E.A], by=x->-x[1])
 
     maxind = min(min_cands, length(cands))
@@ -910,7 +996,9 @@ function try_improve(E::Envelope{S,T,D}; nsubdivide=0, iters=50000, time=1000, t
         maxind += 1
     end
 
-    println("restricted to $maxind / $(length(cands))")
+    fln("restricted to $maxind / $(length(cands))")
+
+    iters_per_restart = div(iters, n_restarts)
 
 	@threads for i in 1:maxind
 		_, oldcand = cands[i]
@@ -921,21 +1009,28 @@ function try_improve(E::Envelope{S,T,D}; nsubdivide=0, iters=50000, time=1000, t
 		end
 
 		push!(accurate_E, (old_v, oldcand))
-        #=
-		if objective(S, old_v, old_v, target) < -0.001
-			continue
-		end
-        =#
 
-		@time newcand = annealing((c; acc=100)->objective(S, uncertain_slope(c,time=acc), old_v, target), oldcand, c->jiggle(c,radius), beta, beta, iters; verbose=false)
-		new_v = exact_slope(newcand)
-        #@show old_v, new_v 
-        
-        lock(stdout) 
+        obj_fn = (c; acc=100) -> objective(S, uncertain_slope(c, time=acc), old_v, target)
+
+        best_restart_cand = oldcand
+        best_restart_val = old_v
+
+        @time for _ in 1:n_restarts
+            newcand = annealing(obj_fn, best_restart_cand, c->jiggle(c,radius), beta, beta, iters_per_restart; verbose=false)
+            new_v = exact_slope(newcand)
+            push!(accurate_E, (new_v, newcand))
+
+            if objective(S, new_v, old_v, target) > objective(S, best_restart_val, old_v, target)
+                best_restart_cand = newcand
+                best_restart_val = new_v
+            end
+        end
+
+        lock(stdout)
         begin
             print(old_v)
             print("->[")
-            for (x,val) in zip(sign.(new_v .- old_v), new_v)
+            for (x,val) in zip(sign.(best_restart_val .- old_v), best_restart_val)
                 a = S==Upper ? 1 : -1
                 if x * a > 0
                     col = :green
@@ -1008,27 +1103,31 @@ function inbounds(pt)
 	return all(abs.(pt) .<= CLIP)
 end
 
+function clip_pt(pt)
+    return [clamp(x, -CLIP, CLIP) for x in pt]
+end
+
 function staircase(E::Envelope{Upper})
-	pts = [x[1] for x in E.A]
-	pts=filter(inbounds, sort!(pts, by=x->x[1]))
+	pts = sort!([x[1] for x in E.A], by=x->x[1])
+	pts = unique!(clip_pt.(pts))
 	return sort(vcat(pts,[(pts[i][1], pts[i+1][2]) for i in 1:length(pts)-1]), by=x->(x[1],-x[2]))
 end
 
 function crevices(E::Envelope{Upper})
-	pts = [x[1] for x in E.A]
-	pts=filter(inbounds, sort!(pts, by=x->x[1]))
+	pts = sort!([x[1] for x in E.A], by=x->x[1])
+	pts = unique!(clip_pt.(pts))
     return [[pts[i][1], pts[i+1][2]] for i in 1:length(pts)-1]
 end
 
 function staircase(E::Envelope{Lower})
-	pts = [x[1] for x in E.A]
-	pts = filter(inbounds, sort!(pts, by=x->x[1]))
+	pts = sort!([x[1] for x in E.A], by=x->x[1])
+	pts = unique!(clip_pt.(pts))
 	return sort(vcat(pts,[(pts[i+1][1], pts[i][2]) for i in 1:length(pts)-1]), by=x->(x[1],-x[2]))
 end
 
 function crevices(E::Envelope{Lower})
-	pts = [x[1] for x in E.A]
-	pts = filter(inbounds, sort!(pts, by=x->x[1]))
+	pts = sort!([x[1] for x in E.A], by=x->x[1])
+	pts = unique!(clip_pt.(pts))
     return [[pts[i+1][1], pts[i][2]] for i in 1:length(pts)-1]
 end
 
@@ -1068,8 +1167,8 @@ function constraints(L::Longitude)
 	#@show npunctures
     closed_chi = chi + sum(npunctures)
 
-    @show chi
-    @show npunctures
+    #@show chi
+    #@show npunctures
 
 	#=
 	if closed_chi >= 0
@@ -1476,7 +1575,7 @@ function n_orthogonal(v::AbstractVector{Int},A::Matrix{Int})
 end
 
 function constraint3(fiber_slope::Slope, chi::Int; verbose=false)
-    @show fiber_slope, chi
+    #@show fiber_slope, chi
 
     g=gcd(fiber_slope...,chi)
     fiber_slope = Slope(fiber_slope .// g)

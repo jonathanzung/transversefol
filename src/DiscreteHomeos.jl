@@ -496,15 +496,15 @@ function jiggle(f::DiscreteHomeo, r::T) where {T}
     #@assert issorted(ordering)
 
     for i in 2:length(ordering)-1
-        if rand() < 0.2 &&
+        if rand() < r &&
            xor(ordering[i-1][1] == ordering[i][1],ordering[i][1] == ordering[i+1][1]) &&
            xor(ordering[i-1][2] == ordering[i][2],ordering[i][2] == ordering[i+1][2]) &&
            ordering[i] != ordering[i+1]
 
-            r=rand()
-            if r < 1/3
+            s=rand()
+            if s < 1/3
                 ordering[i] = ordering[i-1]
-            elseif r < 2/3
+            elseif s < 2/3
                 ordering[i] = (ordering[i-1][1], ordering[i+1][2])
             else
                 ordering[i] = (ordering[i+1][1], ordering[i-1][2])

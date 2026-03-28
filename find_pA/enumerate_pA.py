@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import itertools
 
+import os
 import sys
 sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering/scripts")
 sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering")
@@ -40,8 +41,7 @@ def generate_census():
 	for i, row in enumerate(reader):
 		isosig = row[0].split("_")[0]
 		M=snappy.Manifold(isosig)
-		if i%500==0:
-			print(i)
+
 
 		cusps = M.cusp_info('is_complete').count(True)
 		H = M.homology()
@@ -57,7 +57,8 @@ def generate_census():
 #generate_census()
 
 
-VeeringDB=snappy.database.ManifoldTable(table='census', mfld_hash=basic_hash, db_path="veering_census.sq3")
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "veering_census.sq3")
+VeeringDB=snappy.database.ManifoldTable(table='census', mfld_hash=basic_hash, db_path=_DB_PATH)
 
 def find(isosig):
 	reader = csv.reader(open("veering_census_with_data.txt"), delimiter=" ")
@@ -100,7 +101,7 @@ def iterate_candidate_flows2(M, max_drill=2, max_segments=6, max_tets=20):
 					pass
 					#print(e)
 		except ValueError as e:#in case M is not hyperbolic
-			print(e)
+			print(e, file=sys.stderr)
 
 		if ndrill < max_drill:
 			for curve in M.dual_curves(max_segments=max_segments):
@@ -136,8 +137,8 @@ def iterate_candidate_flows(M, count=10, max_drill=2, maxlength=3):
 					pass
 					#print(e)
 				except RuntimeError as e:
-					print(e)
-					
+					print(e, file=sys.stderr)
+
 
 L=[
 "s137(5,4)",
@@ -162,6 +163,7 @@ L=[
 
 def pA_flows(MM, count=10, max_drill=2, maxlength=3, max_segments=6, max_tets=20, method='geodesic'):
 	D=dict()
+	seen=set()
 
 	if method=='geodesic':
 		it = iterate_candidate_flows(MM, count=count, max_drill=max_drill, maxlength=maxlength)
@@ -176,7 +178,7 @@ def pA_flows(MM, count=10, max_drill=2, maxlength=3, max_segments=6, max_tets=20
 		try:
 			isoms = N.is_isometric_to(M, return_isometries=True)
 		except RuntimeError as e:
-			print(e)
+			print(e, file=sys.stderr)
 			continue
 		assert len(isoms) >= 1
 		for isom in isoms:
@@ -196,14 +198,18 @@ def pA_flows(MM, count=10, max_drill=2, maxlength=3, max_segments=6, max_tets=20
 			assert Mtmp.is_isometric_to(MM)
 			"""
 
+			s = isosig + "_" + str(filling_slopes).replace(" ", "")
+			if s in seen:
+				continue
+			seen.add(s)
+
 			data = prepare.get_prep(isosig)
 			degeneracy = data["degeneracy"]
 
 			prong_counts = [abs(prepare.intersection_number(a,b)) for a,b in zip(filling_slopes, degeneracy)]
 
 			if all(x >= 2 for x in prong_counts):
-				print(prong_counts)
-				yield isosig + "_" + str(filling_slopes).replace(" ", "")
+				yield s
 
 
 
@@ -223,11 +229,11 @@ with open("batch/" + str(name) + "_pAflows.txt","w") as f:
 """
 #print(pA_flows(snappy.Manifold("L6a4"), maxdepth=1))
 
-import pandas as pd
-import csv
-df = pd.read_csv('/home/jonathan/Downloads/conjecture_data/floer/final_data/QHSpheres.csv')
+#import pandas as pd
+#import csv
+#df = pd.read_csv('/home/jonathan/Downloads/conjecture_data/floer/final_data/QHSpheres.csv')
 
-print(df)
+#print(df)
 
 if __name__ == "__main__":
 	"""

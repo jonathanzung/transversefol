@@ -11,15 +11,16 @@ function _load_prep(isosig::String)
 
     to_track(e) = (Int(e[1]), Int(e[2]))
 
-    fans_py    = eval(Meta.parse(raw["fans"]))
-    fc_py      = eval(Meta.parse(raw["face_coorientations"]))
-    poles_py   = eval(Meta.parse(raw["poles"]))
-    rungs_py   = eval(Meta.parse(raw["rungs"]))
-    alledges_py= eval(Meta.parse(raw["alledges"]))
-    top_bot_py = eval(Meta.parse(raw["top_bot_pairs"]))
-    merid_py   = eval(Meta.parse(raw["meridian_dict"]))
-    long_py    = eval(Meta.parse(raw["longitude_dict"]))
-    degen_py   = eval(Meta.parse(raw["degeneracy"]))
+    fans_py      = eval(Meta.parse(raw["fans"]))
+    fc_py        = eval(Meta.parse(raw["face_coorientations"]))
+    poles_py     = eval(Meta.parse(raw["poles"]))
+    rungs_py     = eval(Meta.parse(raw["rungs"]))
+    alledges_py  = eval(Meta.parse(raw["alledges"]))
+    top_bot_py   = eval(Meta.parse(raw["top_bot_pairs"]))
+    merid_py     = eval(Meta.parse(raw["meridian_dict"]))
+    long_py      = eval(Meta.parse(raw["longitude_dict"]))
+    degen_py     = eval(Meta.parse(raw["degeneracy"]))
+    tet_faces_py = eval(Meta.parse(raw["tet_faces"]))
 
     return (
         fans          = [([to_track(e) for e in item[1]], [to_track(e) for e in item[2]]) for item in fans_py],
@@ -31,6 +32,9 @@ function _load_prep(isosig::String)
         meridian_dict  = Dict{Track,Int}(to_track(x) => Int(y) for (x, y) in merid_py),
         longitude_dict = Dict{Track,Int}(to_track(x) => Int(y) for (x, y) in long_py),
         degeneracy    = [(Int(x[1]), Int(x[2])) for x in degen_py],
+        # tet_faces: for each tet, 4 (triangle_index, sign) pairs. sign is in Regina convention;
+        # multiply by face_coorientations[tri_idx] to convert to veering co-orientation convention.
+        tet_faces     = [[(Int(e[1]), Int(e[2])) for e in tet] for tet in tet_faces_py],
     )
 end
 
@@ -45,8 +49,7 @@ function latest_save(filename)
 		println("not found")
         return nothing
 	else
-		println("loading from $(locations[end])")
-        println(Dates.unix2datetime(mtime(locations[end]))-Hour(4)) #show in Eastern time zone
+		@info "loading from $(locations[end])" Dates.unix2datetime(mtime(locations[end]))-Hour(4) #show in Eastern time zone
         return locations[end]
 	end
 end
@@ -73,57 +76,33 @@ function savestat(d::Dict)
     end
 end
 
-function load(isosig::String; refresh=false, nlongs=100)
-	println("setting up $(isosig), requesting $(nlongs) longitudes")
-	flush(stdout)
-
+function load(isosig::String; refresh=false, max_weight=100)
     prep = _load_prep(isosig)
     path = latest_save("$(isosig).jls")
 
 	if path == nothing || refresh
-
-        bt=BoundaryTriangulation(prep.fans, 
-                                 prep.face_coorientations, 
-                                 prep.alledges, 
-                                 prep.poles, 
-                                 prep.rungs, 
-                                 prep.meridian_dict, 
+        bt=BoundaryTriangulation(prep.fans,
+                                 prep.face_coorientations,
+                                 prep.alledges,
+                                 prep.poles,
+                                 prep.rungs,
+                                 prep.meridian_dict,
                                  prep.longitude_dict)
-
-		ncusps = length(bt.rungs)
-
 
         function filternan(A::Vector{T}) where {T}
             tmp = collect(filter(x->!(any(isinf.(x[1]))), A))
             return tmp
         end
 
-
-		Elong, longitudes = compute_longitudes(bt, prep.fans, prep.top_bot_pairs; nlongs=nlongs)
+		Elong, longitudes = compute_longitudes(bt, prep.fans, prep.top_bot_pairs, prep.tet_faces, prep.face_coorientations; max_weight=max_weight)
         Eupper = Envelope{Upper}([(x,set_roundmode(c, DOWN)) for (x,c) in filternan(Elong.A)])
         Elower = Envelope{Lower}([(x,set_roundmode(c, UP)) for (x,c) in filternan(Elong.A)])
-
-        #Eupper= Envelope{Upper,Float64,Cand{DiscreteHomeo}}()
-        #Elower= Envelope{Lower,Float64,Cand{DiscreteHomeo}}()
-
 
 		tup = (bt=bt, Eupper=Eupper, Elower=Elower, Elong=Elong, longitudes=longitudes, isosig=isosig, prep = prep)
         save(tup)
 	else
         tup = (deserialize(path)..., isosig=isosig)
-
-		if length(tup.longitudes) < nlongs
-            Elong, longitudes = compute_longitudes(tup.bt, prep.fans, prep.top_bot_pairs; nlongs=nlongs)
-            for (x,c) in Elong.A
-                push!(tup.Eupper, (x,c))
-                push!(tup.Elower, (x,c))
-            end
-			tup = (tup...,longitudes=longitudes)
-            save(tup)
-		end
 	end
-	println("done setup")
-	flush(stdout)
 	return tup
 end
 
@@ -197,7 +176,7 @@ function dump_points(isosig)
     Econstr_lower, Econstr_upper = obstructions(tup; isosig=isosig)
 
     open("udump.ma", "w") do f
-        mathematica_print(f,[crevices_general(Econstr_upper), crevices_general(Econstr_lower)])
+        mathematica_print(f,[crevices_general(Econstr_upper, CLIP), crevices_general(Econstr_lower, CLIP)])
     end
 end
 

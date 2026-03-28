@@ -337,7 +337,16 @@ def compute_prep(isosig, longitude=None, draw_bt=False):
 	"""
 
 
-	data = {"fans": fans, 
+	# For each tetrahedron: list of (triangle_index, orientation_sign) for its 4 faces.
+	# orientation_sign is ±1 in the Regina/SnaPPy convention (NOT the veering convention).
+	# To get the boundary operator in the veering co-orientation convention, multiply
+	# each sign by face_coorientations[triangle_index].
+	tet_faces = [
+		[(tet.triangle(f).index(), sign(tet.triangleMapping(f))) for f in range(4)]
+		for tet in vt.tri.tetrahedra()
+	]
+
+	data = {"fans": fans,
 		"face_coorientations": face_coorientations,
 		"poles": poles,
 		"rungs": rungs,
@@ -347,6 +356,7 @@ def compute_prep(isosig, longitude=None, draw_bt=False):
 		"meridian_dict": meridian_dict,
 		"longitude_dict": longitude_dict,
 		"degeneracy": degeneracy,
+		"tet_faces": tet_faces,
 		}
 
 	"""

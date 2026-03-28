@@ -30,48 +30,30 @@ function find_s2_longitudes(tup)
     return collect(D)
 end
 
-function compute_longitudes(bt, fans, top_bot_pairs; nlongs=100)
+function compute_longitudes!(tup; max_weight=50)
+	Elong, longitudes = compute_longitudes(tup.bt, tup.prep.fans, tup.prep.top_bot_pairs, tup.prep.tet_faces, tup.prep.face_coorientations; max_weight=max_weight)
+
+    for (_, cand) in Elong.A
+        push!(tup.Eupper, set_roundmode(cand, DOWN))
+        push!(tup.Elower, set_roundmode(cand, UP))
+    end
+    save((tup..., Elong=Elong, longitudes=longitudes))
+end
+
+
+function compute_longitudes(bt, fans, top_bot_pairs, tet_faces, face_coorientations; max_weight=20)
     Elong = PEnvelope()
 	long_dict = DefaultDict(()->[])
 	longitudes = []
 
-    @show bt.rungs
-
-
-    #can't remember what the next two lines are doing, so let's try to remove them
-    #compute_homology(fans, top_bot_pairs)
-    #hom_classes=[map(x->x[1], y[1]) for y in bt.rungs[1:end-1]]
-    #@show hom_classes
-
-	#ch = for l in find_longitudes_random(fans)
-	#ch = find_longitudes_iterative(fans,1000)
-    ch = find_longitudes_hom(fans, top_bot_pairs)
-    for l in ch #find_longitudes_hom(fans,top_bot_pairs)
-
-        #=
-        meridian = [[0,1],[1,0],[0,1]]
-
-        @show (sum(l),slopes(Longitude(bt,l)),
-               [det(hcat(x,y)) for (x,y) in zip(meridian, slopes(Longitude(bt,l)))]
-              )
-        #use this to find the class which intersects each meridian exactly once.
-        =#
+    longitudes_iter = find_longitudes_hom2(fans, top_bot_pairs, tet_faces, face_coorientations; max_weight=max_weight)
+    for l in longitudes_iter
 		if any([sum(abs.(x))==0 for x in slopes(Longitude(bt,l))])
-            @show "rejected"
 			continue
 		end
 		ss = [y//x for (x,y) in slopes(Longitude(bt,l))]
-
-		if !haskey(long_dict, ss)
-			@show length(long_dict)+1
-			#flush(stdout)
-		end
 		push!(long_dict[ss], l)
-		if length(long_dict) >= nlongs
-			break
-		end
 	end
-    close(ch)
 
 	for (ss, ls) in long_dict
 
@@ -91,23 +73,23 @@ function compute_longitudes(bt, fans, top_bot_pairs; nlongs=100)
 end
 
 
-function regimen(E::Envelope, target::Vector{T}; verbose=false) where {T<:Real}
+function regimen(E::Envelope, target::Vector{T}; verbose=false, n_restarts=1, radius=0.2) where {T<:Real}
 	#ncusps = length(E.A[1][1])
 
 	println("phase 1")
-	E = try_improve(E; nsubdivide=0, iters=30000, time=1000, target=target, radius=0.001, beta=500)
+	E = try_improve(E; nsubdivide=0, iters=30000, time=1000, target=target, radius=radius, beta=500, n_restarts=n_restarts)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
 	end
 	println("phase 2")
-	E = try_improve(E; nsubdivide=0, iters=300000, time=2000, target=target, radius=0.001, beta=800)
+	E = try_improve(E; nsubdivide=0, iters=300000, time=2000, target=target, radius=radius, beta=800, n_restarts=n_restarts)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
 	end
 	println("phase 3")
-	E = try_improve(E; nsubdivide=0, iters=1000000, time=2000, target=target, radius=0.001, beta=1600)
+	E = try_improve(E; nsubdivide=0, iters=1000000, time=2000, target=target, radius=radius, beta=1600, n_restarts=n_restarts)
 	flush(stdout)
 	if isinteractive() && verbose
 		add_trace!(p, _plotjs(E))
@@ -141,29 +123,9 @@ function runjob(i::Int, ncusps::Int; kwargs...)
     runjob(VeeringCensus.lookup(i,ncusps); kwargs...)
 end
 
-function runjob(isosig::String; rt=0, thickness=24, ex=false, reg=false, nlongs=100, target=nothing, fromscratch=false, doprune=false, preprune=false, refresh=false, fix=false, verbose=false, bound=false, bound2=0, bound3=0, try_exclude = nothing)
-	tup = load(isosig, nlongs=nlongs, refresh=refresh)
-    println("running $(tup.isosig)")
-    index = VeeringCensus.index(isosig)
+function boundjob(isosig::String; rt=0, thickness=24, ex=false, reg=false, nlongs=50, target=:crevices, fromscratch=false, doprune=false, preprune=false, refresh=false, verbose=false, bound=false, bound2=0, bound3=0, try_exclude=nothing, n_restarts=1, radius=0.2)
 
-    @show target
-    #=
-	global p=quickview(tup; isosig=isosig)
-	if isinteractive() && verbose
-		display(p)
-	end
-    =#
-
-	ncusps = tup.bt.ncusps
-
-
-	Eupper = tup.Eupper
-	Elower = tup.Elower
-
-	if preprune
-		prune!(Eupper)
-		prune!(Elower)
-	end
+    	tup = load(isosig, refresh=refresh)
 
     if bound
         Eupperbound = Envelope{Upper}(eltype(Eupper.A)[])
@@ -368,97 +330,11 @@ function runjob(isosig::String; rt=0, thickness=24, ex=false, reg=false, nlongs=
         save((tup..., Elower=Elowertmp, Eupper=Euppertmp, Eupperbound=Eupperbound, Elowerbound=Elowerbound))
     end
 
-	if rt>0
-		randE = random_trials(tup.bt,ntrials=rt,thickness=thickness, roundmode=DOWN)
-        #todo: multithread this
-		@threads for (x,c) in randE.A
-            push!(Eupper, (x,c))
-		end
-
-		randE = random_trials(tup.bt,ntrials=rt,thickness=thickness, roundmode=UP)
-		@threads for (x,c) in randE.A
-            push!(Elower, (x,c))
-        end
-
-        save((tup..., Eupper=Eupper, Elower=Elower))
-	end
-
-	if reg
-		Eupper = regimen(Eupper, [CLIP for i in 1:ncusps]; verbose=verbose)
-        save((tup..., Eupper=Eupper, Elower=Elower))
-        Elower = regimen(Elower, [-CLIP for i in 1:ncusps]; verbose=verbose)
-        save((tup..., Eupper=Eupper, Elower=Elower))
-	end
-
-    if target == :gaps
-        Econstr_lower, Econstr_upper = obstructions(tup)#; isosig=isosig)
-        Econstr_lower::Envelope{Lower}
-        Econstr_upper::Envelope{Upper}
-
-        upper_goals = collect(filter(x->!inclosure(Eupper, x), crevices_general(Econstr_lower)))
-        lower_goals = collect(filter(x->!inclosure(Elower, x), crevices_general(Econstr_upper)))
-        @show upper_goals
-        @show lower_goals
-
-        shuffle!(upper_goals)
-        shuffle!(lower_goals)
-
-        Euppertmp = if fromscratch
-                        Envelope{Upper}(copy(tup.Elong.A))
-                    else
-                        Eupper
-                    end
-
-        Elowertmp = if fromscratch
-                        Envelope{Lower}([(x,set_roundmode(c, UP)) for (x,c) in tup.Elong.A])
-                    else
-                        Elower
-                    end
-
-        @threads for target in upper_goals
-            if !inclosure(Eupper, target)
-                @show target
-                Etmp = regimen(Envelope{Upper}(copy(Euppertmp.A)), target)
-                for x in Etmp.A
-                    push!(Eupper, x)
-                end
-                lock(Eupper.L) do
-                    lock(Elower.L) do
-                        save((tup..., Eupper=Eupper, Elower=Elower))
-                    end
-                end
-            end
-        end
-        @threads for target in lower_goals
-            if !inclosure(Elower, target)
-                @show target
-                Etmp = regimen(Envelope{Lower}(copy(Elowertmp.A)), target)
-                for x in Etmp.A
-                    push!(Elower, x)
-                end
-                lock(Eupper.L) do
-                    lock(Elower.L) do
-                        save((tup..., Eupper=Eupper, Elower=Elower))
-                    end
-                end
-            end
-        end
-        save((tup..., Eupper=Eupper, Elower=Elower))
-
-    elseif target != nothing
-		Etmp = regimen(Envelope{Upper}(copy(
-											if fromscratch
-												tup.Elong.A
-											else
-                                                Eupper.A
-											end
-											)), target)
-		for x in Etmp.A
-			push!(Eupper, x)
-		end
-	end
 
 
+end
+
+function add_extreme_candidates!(isosig::String)
 	if ex
 		Elower2, Eupper2 = extreme_candidates(tup.bt)
 
@@ -469,21 +345,87 @@ function runjob(isosig::String; rt=0, thickness=24, ex=false, reg=false, nlongs=
 			push!(Eupper, x)
 		end
 	end
+end
+
+const TRY = (
+            pool_size=1,
+            n_walks=1, 
+            iters=100000, 
+            betastart=400, 
+            betafinish=20000, 
+            radius=0.1
+        )
+const TRYHARD = (
+            pool_size=5,
+            n_walks=10, 
+            iters=200000, 
+            betastart=400, 
+            betafinish=20000, 
+            radius=0.1
+        )
 
 
-	if doprune
-		prune!(Eupper)
-		prune!(Elower)
-	end
+function runjob(isosig::String; target=:crevices, refresh=false, showplots=true, candidates=[:longitudes], thickness=24, max_targets=100, optimization_args...)
+	tup = load(isosig, refresh=refresh)
 
-	p=quickview((tup..., Eupper=Eupper, Elower=Elower))
-	if isinteractive() && verbose
+    @info "running $(tup.isosig)" target
+    index = VeeringCensus.index(isosig)
+
+	ncusps = tup.bt.ncusps
+	Eupper = tup.Eupper
+	Elower = tup.Elower
+
+    upper_cands = []
+    lower_cands = []
+
+    if :longitudes in candidates
+        for (_,c) in (tup.Elong.A)
+            push!(upper_cands, set_roundmode(c,DOWN))
+            push!(lower_cands, set_roundmode(c,UP))
+        end
+    end
+    if :envelope in candidates
+        for (_,c) in (tup.Eupper.A)
+            push!(upper_cands, set_roundmode(c,DOWN))
+        end
+        for (_,c) in (tup.Elower.A)
+            push!(lower_cands, set_roundmode(c,UP))
+        end
+    end       
+    if :random in candidates
+        for _ in 1:1000
+            push!(upper_cands, random_cand(tup.bt,thickness,DOWN))
+            push!(lower_cands, random_cand(tup.bt,thickness, UP))
+        end
+    end
+
+    if target == :crevices
+        upper_targets = crevices_general(Eupper,CLIP)
+        lower_targets = crevices_general(Elower,CLIP)
+    else
+        upper_targets = [target]
+        lower_targets = [target]
+    end
+
+    if length(upper_targets) > max_targets
+        upper_targets = shuffle(upper_targets)[1:max_targets]
+    end
+    if length(lower_targets) > max_targets
+        lower_targets = shuffle(lower_targets)[1:max_targets]
+    end
+
+    try_improve!(Eupper, upper_cands; targets=upper_targets, optimization_args...)
+    save((tup..., Eupper=Eupper, Elower=Elower))
+    try_improve!(Elower, lower_cands; targets=lower_targets, optimization_args...)
+    save((tup..., Eupper=Eupper, Elower=Elower))
+
+	p=quickview((tup..., Eupper=Eupper, Elower=Elower), targets=vcat(upper_targets, lower_targets))
+	if isinteractive() && showplots
 		display(p)
 	end
     PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(isosig).html"))
     PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(index).html"))
     #save((tup..., Eupper=Eupper, Elower=Elower))
-    println("done job")
 	flush(stdout)
 end
 

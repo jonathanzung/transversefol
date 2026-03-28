@@ -18,12 +18,15 @@ using OffsetArrays
 using PlotlyJS
 using Polynomials
 using Profile
+using ProgressMeter
 using Random
 using Serialization
 using SparseArrays
 using StaticArrays
 using Subscripts
 using WebIO
+
+export runjob, quickview, quickview_snappy
 
 # Sub-modules
 include("Envelopes.jl")

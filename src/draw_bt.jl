@@ -30,7 +30,7 @@ function bdry(bt, A::DefaultDict{Track, T}; scale=x->one(T)) where {T}
     return ret
 end
 
-function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8, curve=nothing) where {Hm} #i is which cusp to draw
+function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8, curve=nothing, preview=true, name="cusp$(i)") where {Hm} #i is which cusp to draw
     #curve is an ArrayDict giving weights of a curve to draw on the boundary.
     #weight should be a map from Tracks to displacement vectors
     #
@@ -82,7 +82,7 @@ function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8, curv
         end
     end
 
-    Luxor.Drawing(SCALEPT[1]+2*PAD, SCALEPT[2]+2*PAD, "cusp$(i).svg")
+    Luxor.Drawing(SCALEPT[1]+2*PAD, SCALEPT[2]+2*PAD, joinpath(tempdir(), "$(name).svg"))
     Luxor.origin(PAD,PAD)
     #Luxor.background("white")
     Luxor.box(-Point(PAD-1, PAD-1), Point((SCALEPT .+ (PAD - 1))...), action = :clip)
@@ -199,8 +199,10 @@ function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8, curv
     Luxor.box(Point(0,0), Point(SCALEPT...), action = :stroke)
     Luxor.clipreset()
 
+    path = joinpath(tempdir(), "$(name).svg")
     Luxor.finish()
-    Luxor.preview()
-
-
+    if preview
+        run(`xdg-open $path`; wait=false)
+    end
+    return path
 end

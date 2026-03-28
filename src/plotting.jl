@@ -15,8 +15,9 @@ end
 const TAUT_COLOUR = "#00cc96"
 const POS_CONTACT_COLOUR = "#eeee00"
 const NEG_CONTACT_COLOUR = "#00eeee"
-const OBSTRUCTION_COLOUR ="#ef553b" 
+const OBSTRUCTION_COLOUR ="#ef553b"
 const LONGITUDE_COLOUR = "#636EFA"
+const H2_COLOUR = "#FF61FF"
 
 function _plotjs(E::Envelope{S}; color=TAUT_COLOUR, name="") where {S<:Union{Upper,Lower}}
 	pts = [x[1] for x in E.A]
@@ -29,14 +30,14 @@ function _plotjs(E::Envelope{S}; color=TAUT_COLOUR, name="") where {S<:Union{Upp
             attr(color=color)
         end
 		all_pts = staircase(E)
-		PlotlyJS.scatter(x=[x[1] for x in all_pts],y=[x[2] for x in all_pts], mode="lines", line=attr(color=color), name=name, legendgroup=name)
+		PlotlyJS.scatter(x=Float64[x[1] for x in all_pts],y=Float64[x[2] for x in all_pts], mode="lines", line=attr(color=color), name=name, legendgroup=name)
 	elseif dim==3
         marker = if color==nothing
             attr(size=3)
         else
             attr(color=color,size=3)
         end
-		PlotlyJS.scatter(x=[x[1] for x in pts],y=[x[2] for x in pts], z=[x[3] for x in pts], mode="markers", type="scatter3d", marker=marker)
+		PlotlyJS.scatter(x=Float64[x[1] for x in pts],y=Float64[x[2] for x in pts], z=Float64[x[3] for x in pts], mode="markers", type="scatter3d", marker=marker)
 	else
 		@assert false
 	end
@@ -47,7 +48,7 @@ function _plotjs(E::Envelope{S,T}; color=nothing) where {S,T}
 
 
 	if length(pts)==0
-		return PlotlyJS.scatter(x=T[],y=T[], mode="markers")
+		return PlotlyJS.scatter(x=Float64[],y=Float64[], mode="markers")
 	end
 	dim = length(pts[1])
 
@@ -58,7 +59,7 @@ function _plotjs(E::Envelope{S,T}; color=nothing) where {S,T}
         else
             attr(color=color)
         end
-		PlotlyJS.scatter(x=T[x[1] for x in _pts],y=T[x[2] for x in _pts], mode="markers", marker=marker)
+		PlotlyJS.scatter(x=Float64[x[1] for x in _pts],y=Float64[x[2] for x in _pts], mode="markers", marker=marker)
 	elseif dim==3
         marker = if color==nothing
             attr(size=3)
@@ -66,7 +67,7 @@ function _plotjs(E::Envelope{S,T}; color=nothing) where {S,T}
             attr(color=color,size=3)
         end
 
-		PlotlyJS.scatter(x=T[x[1] for x in pts],y=T[x[2] for x in pts], z=T[x[3] for x in pts], mode="markers", type="scatter3d", marker=marker)
+		PlotlyJS.scatter(x=Float64[x[1] for x in pts],y=Float64[x[2] for x in pts], z=Float64[x[3] for x in pts], mode="markers", type="scatter3d", marker=marker)
 	else
 		@assert false	
 	end
@@ -94,7 +95,7 @@ function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper}; color=TAUT_COLOUR, na
             return []
         else
             #return [PlotlyJS.scatter(x=[E1.A[1][1], E2.A[1][1]],y=[0,0], mode="lines", name=name, legendgroup = name, line=attr(color=color))]
-            return [PlotlyJS.scatter(x=[E1.A[1][1][1], E2.A[1][1][1]],y=[0,0], mode="lines", name=name, legendgroup = name, line=attr(color=color))]
+            return [PlotlyJS.scatter(x=Float64[E1.A[1][1][1], E2.A[1][1][1]],y=[0,0], mode="lines", name=name, legendgroup = name, line=attr(color=color))]
         end
     elseif dim==2
 		all_pts1=staircase(E1)
@@ -117,8 +118,8 @@ function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper}; color=TAUT_COLOUR, na
 			push!(all_pts2, [all_pts2[end][1], all_pts1[end][2]])
 		end
 
-		return [PlotlyJS.scatter(x=[x[1] for x in all_pts1],y=[x[2] for x in all_pts1], mode="lines", fill="tonexty", name=name, legendgroup = name, fillcolor="#00000000", line=attr(color=color)),
-				PlotlyJS.scatter(x=[x[1] for x in all_pts2],y=[x[2] for x in all_pts2], mode="lines", fill="tonexty", name=name, legendgroup = name, line=attr(color=color)),
+		return [PlotlyJS.scatter(x=Float64[x[1] for x in all_pts1],y=Float64[x[2] for x in all_pts1], mode="lines", fill="tonexty", name=name, legendgroup = name, fillcolor="#00000000", line=attr(color=color)),
+				PlotlyJS.scatter(x=Float64[x[1] for x in all_pts2],y=Float64[x[2] for x in all_pts2], mode="lines", fill="tonexty", name=name, legendgroup = name, line=attr(color=color)),
 				]
 	elseif dim==3
         cubes = []
@@ -129,12 +130,12 @@ function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper}; color=TAUT_COLOUR, na
                 end
             end
         end
-        return [combine_meshes(cubes)]
+        return [combine_meshes(cubes; name=name)]
 		#return [_plotjs(E1; color=color), _plotjs(E2, color=color)]
 	end
 end
 
-function combine_meshes(v::Vector) #a vector of tuples
+function combine_meshes(v::Vector; name="") #a vector of tuples
     xs = collect(Iterators.flatten(m.x for m in v))
     ys = collect(Iterators.flatten(m.y for m in v))
     zs = collect(Iterators.flatten(m.z for m in v))
@@ -152,10 +153,12 @@ function combine_meshes(v::Vector) #a vector of tuples
         curroffset += length(m.x)
     end
 
-    return mesh3d(x=xs,y=ys,z=zs,i=is,j=js,k=ks,facecolor=facecolors, flatshading=true, showlegend=true)
+    return mesh3d(x=xs,y=ys,z=zs,i=is,j=js,k=ks,facecolor=facecolors, flatshading=true, showlegend=true, name=name)
 end
 
 function cube(p1, p2)
+    p1 = Float64.(p1)
+    p2 = Float64.(p2)
     facecolor = repeat([
     	#"rgb(50, 200, 200)", #GB
     	#"rgb(100, 200, 255)", #BBG
