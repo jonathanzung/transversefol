@@ -1,7 +1,3 @@
-import sys
-sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering/scripts")
-sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering")
-
 import veering
 from veering import file_io
 import regina
@@ -17,17 +13,17 @@ from snappy.snap.peripheral import link, dual_cellulation
 from collections import defaultdict
 from collections import Counter
 import itertools
-import boundary_triangulation
+import veering.boundary_triangulation as boundary_triangulation
 import ast
 import time
 import os
+import sys
 
 sys.set_int_max_str_digits(0)
 
-
 #veering_knots_with_data = file_io.parse_data_file("data/knot_hom_census_with_data.txt")
 
-CACHE_PATH="/home/jonathan/Dropbox/jonathan/transversefol/cache"
+CACHE_PATH="/home/jonathan/batch/prep_cache"
 
 def sign(perm):
 	l=4
@@ -37,34 +33,6 @@ def sign(perm):
 			if perm[j] > perm[i]:
 				ret = -ret
 	return ret
-
-"""
-degen = bun2.degeneracy_slopes()
-fibre = bun2.fibre_slopes()
-find_s3_slope(M)
-meridian = [x.filling for x in M.cusp_info()]
-
-print(M)
-
-for i in range(M.num_cusps()):
-	print("cusp "+str(i))
-	if i==0:
-		A=np.linalg.inv(np.transpose(np.array([fibre[i],meridian[i]])))
-	else:
-		A=np.linalg.inv(np.transpose(np.array([fibre[i],degen[i]])))
-
-	print("degen_slope " + str(np.matmul(A,np.array(degen[i]))))
-	print("fiber_slope " + str(np.matmul(A,np.array(fibre[i]))))
-	print("s3_slope " + str(np.matmul(A,np.array(meridian[i]))))
-
-"""
-
-"""
-s=bun.snappy_string()
-M=snappy.Manifold(s)
-tri=regina.SnapPeaTriangulation(s)
-angle=[1 for i in range(M.num_tetrahedra())] #flipper arranges that all the tetrahedra are flattened in the same way
-"""
 
 def btpoles(bt):
 	return [ttpoles(tt) for tt in bt.torus_triangulation_list]
@@ -94,7 +62,7 @@ def rung_labels(lu):
 		return [face_label(lu,v) for v in list(lu.right_vertices)]
 
 def face_label(lu, face_num):
-	tet = lu.vt.tri.tetrahedron( lu.tet_num )
+	tet = lu.vt().tri.tetrahedron( lu.tet_num )
 	triangle = tet.triangle(face_num)
 	vert = tet.vertex(face_num)
 	triangle_num = triangle.index()
@@ -204,39 +172,7 @@ def intersection_number(x,y):
 def flatten(lists):
 	return [x for l in lists for x in l]
 
-"""
-def find_longitudes(vt):
-	fans = veering.transverse_taut.edge_side_face_collections(vt.tri,vt.angle)
-
-	relations = [([x[0] for x in f1], [x[0] for x in f2]) for (f1,f2) in fans]
-
-
-	l = sorted(flatten(flatten(relations)))
-	n = max(l)+1 #number of tetrahedra
-	assert len(l) == (max(l)+1)*3
-	#println(n)
-	p = sage.all.MixedIntegerLinearProgram()
-	w = p.new_variable(integer=True, nonnegative=True)
-
-
-	M=np.zeros((len(relations),n))
-	for (i,(l1,l2)) in enumerate(relations):
-		for j in l1:
-			M[i,j] += 1
-		for j in l2:
-			M[i,j] -= 1
-	
-	for i in range(len(relations)):
-		p.add_constraint(sum([M[i,j]*w[j]]) == 0)
-	
-	for i in range(n):
-		p.add_constraint(w[i]<= 100)
-	
-	print(p.polyhedron().integral_points())
-"""
-
-
-def compute_prep(isosig, longitude=None, draw_bt=False):
+def compute_prep(isosig, draw_bt=False):
 	x = taut.isosig_to_tri_angle(isosig)
 	vt = veering.veering_tri.veering_triangulation(*x)
 
@@ -325,18 +261,6 @@ def compute_prep(isosig, longitude=None, draw_bt=False):
 
 	#find_longitudes(vt)
 
-	"""
-	if longitude is not None:
-		l=[0 for i in range(vt.tri.countTriangles())]
-		for i,j in longitude: #i is a tetrahedron number, j is the face index
-			l[vt.tri.tetrahedron(i).triangle(j).index()] += 1
-		print("longitude=OffsetArrays.Origin(0)(" + str(l) + ")", file=info_file)
-	else:
-		print("longitude=nothing", file=info_file)
-	info_file.close()
-	"""
-
-
 	# For each tetrahedron: list of (triangle_index, orientation_sign) for its 4 faces.
 	# orientation_sign is ±1 in the Regina/SnapPy convention (NOT the veering convention).
 	# To get the boundary operator in the veering co-orientation convention, multiply
@@ -352,7 +276,6 @@ def compute_prep(isosig, longitude=None, draw_bt=False):
 		"rungs": rungs,
 		"alledges": alledges,
 		"top_bot_pairs": top_bot_pairs,
-		#"preferred_longitude": "nothing" if longitude == None else str(longitude),
 		"meridian_dict": meridian_dict,
 		"longitude_dict": longitude_dict,
 		"degeneracy": degeneracy,
@@ -374,7 +297,7 @@ def get_prep(isosig, draw_bt=False):
 	cache_filename = os.path.join(CACHE_PATH, isosig + ".json")
 	try:
 		with open(cache_filename) as cachefile:
-			#print("Retrieving from cache")
+			print("Retrieving from cache")
 			data = {k: ast.literal_eval(v) for k,v in json.load(cachefile).items()}
 
 	except FileNotFoundError:
