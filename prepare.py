@@ -53,7 +53,7 @@ def btrungs(bt):
 	return [ttrungs(tt) for tt in bt.torus_triangulation_list]
 
 def ttrungs(tt):
-    return [list(set([a for lu in L.ladder_unit_list for a in rung_labels(lu)])) for L in tt.ladder_list]
+	return [list(set([a for lu in L.ladder_unit_list for a in rung_labels(lu)])) for L in tt.ladder_list]
 
 def rung_labels(lu):
 	if lu.is_on_left():
@@ -297,7 +297,7 @@ def get_prep(isosig, draw_bt=False):
 	cache_filename = os.path.join(CACHE_PATH, isosig + ".json")
 	try:
 		with open(cache_filename) as cachefile:
-			print("Retrieving from cache")
+			#print("Retrieving from cache")
 			data = {k: ast.literal_eval(v) for k,v in json.load(cachefile).items()}
 
 	except FileNotFoundError:
