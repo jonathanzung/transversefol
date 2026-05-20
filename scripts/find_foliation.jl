@@ -18,7 +18,7 @@ using TransverseFol
 using TransverseFol.Envelopes
 using JSON
 
-const PYTHON       = "/home/jonathan/miniconda3/envs/sage/bin/python3"
+const PYTHON       = ENV["TRANSVERSEFOL_PYTHON"]
 const FIND_PA_SCRIPT = joinpath(@__DIR__, "find_pA_flows.py")
 
 # ---------------------------------------------------------------------------

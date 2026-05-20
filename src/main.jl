@@ -377,7 +377,7 @@ function runjob(isosig::String; refresh=false, kwargs...)
     runjob(load(isosig, refresh=refresh); kwargs...)
 end
 
-function runjob(tup::NamedTuple; target=:crevices, refresh=false, showplots=true, candidates=[:longitudes], thickness=24, max_targets=100, optimization_args...)
+function runjob(tup::NamedTuple; target=:crevices, refresh=false, saveplots=true, showplots=true, candidates=[:longitudes], thickness=8, max_targets=100, optimization_args...)
 
     @info "running $(tup.isosig)" target
     index = VeeringCensus.index(tup.isosig)
@@ -385,6 +385,29 @@ function runjob(tup::NamedTuple; target=:crevices, refresh=false, showplots=true
 	ncusps = tup.bt.ncusps
 	Eupper = tup.Eupper
 	Elower = tup.Elower
+
+    if target == :crevices
+        #best to add something to the envelopes first
+        for _ in 1:10000
+            push!(Eupper, random_cand(tup.bt,thickness,DOWN))
+            push!(Elower, random_cand(tup.bt,thickness, UP))
+        end
+        upper_targets = crevices_general(Eupper,25; N=tup.bt.ncusps)
+        lower_targets = crevices_general(Elower,25; N=tup.bt.ncusps)
+
+        @info upper_targets
+        @info lower_targets
+    else
+        upper_targets = [target]
+        lower_targets = [target]
+    end
+
+    if length(upper_targets) > max_targets
+        upper_targets = shuffle(upper_targets)[1:max_targets]
+    end
+    if length(lower_targets) > max_targets
+        lower_targets = shuffle(lower_targets)[1:max_targets]
+    end
 
     upper_cands = []
     lower_cands = []
@@ -402,27 +425,12 @@ function runjob(tup::NamedTuple; target=:crevices, refresh=false, showplots=true
         for (_,c) in (tup.Elower.A)
             push!(lower_cands, set_roundmode(c,UP))
         end
-    end       
+    end
     if :random in candidates || length(upper_cands) < 10 || length(lower_cands) < 10
-        for _ in 1:1000
-            push!(upper_cands, random_cand(tup.bt,thickness,DOWN))
-            push!(lower_cands, random_cand(tup.bt,thickness, UP))
+        for _ in 1:max(get(optimization_args, :pool_size, 0),1000)
+            push!(upper_cands, random_cand(tup.bt, thickness,DOWN))
+            push!(lower_cands, random_cand(tup.bt, thickness,UP))
         end
-    end
-
-    if target == :crevices
-        upper_targets = crevices_general(Eupper,25)
-        lower_targets = crevices_general(Elower,25)
-    else
-        upper_targets = [target]
-        lower_targets = [target]
-    end
-
-    if length(upper_targets) > max_targets
-        upper_targets = shuffle(upper_targets)[1:max_targets]
-    end
-    if length(lower_targets) > max_targets
-        lower_targets = shuffle(lower_targets)[1:max_targets]
     end
 
     try_improve!(Eupper, upper_cands; targets=upper_targets, optimization_args...)
@@ -430,11 +438,9 @@ function runjob(tup::NamedTuple; target=:crevices, refresh=false, showplots=true
     try_improve!(Elower, lower_cands; targets=lower_targets, optimization_args...)
     save((tup..., Eupper=Eupper, Elower=Elower))
 
-    if showplots
-	    p=quickview((tup..., Eupper=Eupper, Elower=Elower), targets=vcat(upper_targets, lower_targets))
-        PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(tup.isosig).html"))
-        PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(index).html"))
-        if isinteractive()
+    if saveplots || showplots
+	    p=quickview((tup..., Eupper=Eupper, Elower=Elower), targets=vcat(upper_targets, lower_targets), save_html=saveplots, save_png=saveplots)
+        if isinteractive() && showplots
             display(p)
         end
 	end

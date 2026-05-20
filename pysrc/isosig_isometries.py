@@ -28,6 +28,7 @@ import os
 import ast
 import json
 import argparse
+import random
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -52,9 +53,15 @@ def parse_isosig(s):
 
 def manifold_from_isosig(base_isosig):
     """Build a SnaPPy Manifold from a veering isosig, using veering orientation."""
-    tri, _angle = veering.taut.isosig_to_tri_angle(base_isosig)
-    assert tri.isOriented()
-    return snappy.Manifold(tri)
+
+    idx = base_isosig.rfind("_")
+
+    if idx != -1: #then we're dealing with a veering isosig
+        tri, _angle = veering.taut.isosig_to_tri_angle(base_isosig)
+        assert tri.isOriented()
+        return snappy.Manifold(tri)
+    else: #it's a raw snappy isosig
+        return snappy.Manifold(base_isosig)
 
 
 def filled_manifold(M):
@@ -91,34 +98,34 @@ def process_isosig(full_isosig, MM):
         print(f"# No isometry found for {full_isosig}", file=sys.stderr)
         return None
 
-    isom = isoms[0]
-    imgs = list(isom.cusp_images())
-    maps = list(isom.cusp_maps())
+    for isom in isoms:
+        imgs = list(isom.cusp_images())
+        maps = list(isom.cusp_maps())
 
-    # Build BasisChange-style output: slice, perm, cusp_maps (no nulls).
-    # unfilled_idx lists the surviving M cusps in order; for each, perm[k] = MM cusp.
-    n = M.num_cusps()
-    slice_ = []
-    perm = []
-    cusp_maps_out = []
-    surviving_k = 0
-    for j in range(n):
-        if j in unfilled_idx:
-            slice_.append([0, 0])
-            perm.append(int(imgs[surviving_k]))
-            m = maps[surviving_k]
-            cusp_maps_out.append([[int(m[r, c]) for c in range(2)] for r in range(2)])
-            surviving_k += 1
-        else:
-            f = fillings[j] if fillings else [0, 0]
-            slice_.append(list(f))
+        # Build BasisChange-style output: slice, perm, cusp_maps (no nulls).
+        # unfilled_idx lists the surviving M cusps in order; for each, perm[k] = MM cusp.
+        n = M.num_cusps()
+        slice_ = []
+        perm = []
+        cusp_maps_out = []
+        surviving_k = 0
+        for j in range(n):
+            if j in unfilled_idx:
+                slice_.append([0, 0])
+                perm.append(int(imgs[surviving_k]))
+                m = maps[surviving_k]
+                cusp_maps_out.append([[int(m[r, c]) for c in range(2)] for r in range(2)])
+                surviving_k += 1
+            else:
+                f = fillings[j] if fillings else [0, 0]
+                slice_.append(list(f))
 
-    return {
-        "isosig":    full_isosig,
-        "slice":     slice_,
-        "perm":      perm,
-        "cusp_maps": cusp_maps_out,
-    }
+        yield {
+            "isosig":    full_isosig,
+            "slice":     slice_,
+            "perm":      perm,
+            "cusp_maps": cusp_maps_out,
+        }
 
 
 def main():
@@ -141,12 +148,10 @@ def main():
     MM, _ = filled_manifold(M0)
     print(f"# Common manifold MM: {MM}  ({MM.num_cusps()} cusp(s))", file=sys.stderr)
 
-    for full_isosig in isosigs:
-        result = process_isosig(full_isosig, MM)
-        if result is None:
-            continue
-        sys.stdout.write(json.dumps(result) + "\n")
-        sys.stdout.flush()
+    for full_isosig in isosigs[1:]:
+        for result in process_isosig(full_isosig, MM):
+            sys.stdout.write(json.dumps(result) + "\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":

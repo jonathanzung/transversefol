@@ -202,7 +202,11 @@ function draw(c::Cand{Hm}, i::Int; SCALE=200, PAD=200, JUNCTIONHEIGHT=1//8, curv
     path = joinpath(tempdir(), "$(name).svg")
     Luxor.finish()
     if preview
-        run(`xdg-open $path`; wait=false)
+        if Sys.islinux()
+            run(`xdg-open $path`; wait=false)
+        elseif Sys.isapple()
+            run(`open $path`; wait=false)
+        end
     end
     return path
 end

@@ -138,8 +138,7 @@ function all_leaves(c::Crevice{N}) where {N}
     return unique(accumulate_leaves!(c,SVector{N}[]))
 end
 
-function crevices_general(e::Envelope{Upper,T}, clip) where {T}
-    N=length(e.A[1][1])
+function crevices_general(e::Envelope{Upper,T}, clip; N=length(e.A[1][1])) where {T}
     c=Crevice([SVector{N,T}([(i==j ? -clip : clip) for j in 1:N]) for i in 1:N])
     @showprogress desc="computing crevices" for (x,_) in e.A
         push!(c, SVector{N,T}(x))
@@ -147,8 +146,7 @@ function crevices_general(e::Envelope{Upper,T}, clip) where {T}
     return [Vector{T}(x) for x in all_leaves(c)]
 end
 
-function crevices_general(e::Envelope{Lower,T}, clip) where {T}
-    N=length(e.A[1][1])
+function crevices_general(e::Envelope{Lower,T}, clip; N=length(e.A[1][1])) where {T}
     c=Crevice([SVector{N,T}([(i==j ? -clip : clip) for j in 1:N]) for i in 1:N])
     @showprogress desc="computing crevices" for (x,_) in e.A
         push!(c, -SVector{N,T}(x))

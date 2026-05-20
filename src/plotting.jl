@@ -165,7 +165,7 @@ function _plotjs(E1::Envelope{Lower}, E2::Envelope{Upper}; color=TAUT_COLOUR, na
             return []
         else
             #return [PlotlyJS.scatter(x=[E1.A[1][1], E2.A[1][1]],y=[0,0], mode="lines", name=name, legendgroup = name, line=attr(color=color))]
-            return [PlotlyJS.scatter(x=Float64[E1.A[1][1][1], E2.A[1][1][1]],y=[0,0], mode="lines", name=name, legendgroup = name, line=attr(color=color))]
+            return [PlotlyJS.scatter(x=Float64[clamp(E1.A[1][1][1],-CLIP,CLIP), clamp(E2.A[1][1][1],-CLIP,CLIP)],y=[0,0], mode="lines", name=name, legendgroup = name, line=attr(color=color, width=6))]
         end
     elseif dim==2
         rect_data = Envelopes.rectangles(E1, E2)
@@ -247,22 +247,8 @@ function quickview(tup::NamedTuple; longitudes=true, obstructions=(tup.bt.ncusps
     isosig = tup.isosig
     index = VeeringCensus.index(isosig)
 
-    #include("batch/$(isosig).txt")
 	Eupper = tup.Eupper
 	Elower = tup.Elower
-
-
-    #=
-	if isosig == "eLMkbcddddedde_2100"
-        dummy_candidate=random_cand(tup.bt, 1, DOWN)
-		for pt in [(-2,1/2), (-1, 1/3), (-1/2, 1/6), (-1/3, 1/9), (-1/4, 1/12), (-1/5, 1/15), (-1/6, 1/18)]
-			push!(Eupper, (pt, dummy_candidate))
-			push!(Elower, (map(x->-x,pt), dummy_candidate))
-		end
-	end
-    =#
-
-
 	bt = tup.bt
     ncusps=bt.ncusps
     unfilled = isempty(fillings) ? collect(1:ncusps) : [i for i in 1:ncusps if fillings[i] == (0,0)]
@@ -323,7 +309,7 @@ function quickview(tup::NamedTuple; longitudes=true, obstructions=(tup.bt.ncusps
         #b1=bound(tup.Eupper, sss[1])
         #b2=bound(tup.Elower, sss[1])
         push!(long_slopes, sss)
-        push!(longitudeDF, (ss=slopes(L), l=l, namedtuple_full(sss)..., text=string((normchi=normalizedchi(L),ss=Vector{Vector{Int}}(ss),weights=l)), nchi = normalizedchi(L)))
+        push!(longitudeDF, (ss=slopes(L), l=l, namedtuple_full(sss)..., text=string((filledchi=normalizedchi(L),ss=Vector{Vector{Int}}(ss),weights=l)), nchi = normalizedchi(L)))
 
         if is_fiber(l,tup.prep.top_bot_pairs) || true
             #@assert connected_components(l,fans)==1
@@ -377,8 +363,10 @@ function quickview(tup::NamedTuple; longitudes=true, obstructions=(tup.bt.ncusps
 
 
 
-    long_ranges = [[minimum(filter(r -> abs(r) < CLIP/5, collect(x[i] for x in long_slopes)), init=CLIP),
-                           maximum(filter(r -> abs(r) < CLIP/5, collect(x[i] for x in long_slopes)), init=-CLIP)] for i in 1:ncusps_unfilled]
+    envelope_slopes = vcat([Float64.(v) for (v,_) in Eupper.A], [Float64.(v) for (v,_) in Elower.A])
+    all_range_slopes = vcat(long_slopes, envelope_slopes)
+    long_ranges = [[minimum(filter(r -> abs(r) < CLIP/5, collect(x[i] for x in all_range_slopes)), init=CLIP/5),
+                           maximum(filter(r -> abs(r) < CLIP/5, collect(x[i] for x in all_range_slopes)), init=-CLIP/5)] for i in 1:ncusps_unfilled]
 
     paddings = [0.5 * (y-x) for (x,y) in long_ranges]
     trimmed_ranges = [[range[1]-pad, range[2]+pad] for (range,pad) in zip(long_ranges, paddings)]
@@ -457,92 +445,6 @@ function quickview(tup::NamedTuple; longitudes=true, obstructions=(tup.bt.ncusps
         addtraces!(p, _plotjs(Envelope{Lower,Rational{Int},Cand{DiscreteHomeo}}([(Rational{Int}[-CLIP for i in 1:ncusps_unfilled],dummy_candidate)]), Eupper, color=POS_CONTACT_COLOUR, name="positive contact structures")...)
     end
 
-    if length(Elower.A) > 0 && length(Eupper.A) > 0
-        addtraces!(p, _plotjs(Elower, Eupper, name="Foliation slopes")...)
-    end
-
-    if haskey(tup, :Elowerbound)
-        addtraces!(p, _plotjs(tup.Elowerbound, tup.Eupperbound, name="bound")...)
-    end
-
-    if obstructions
-        if length(Econstr_lower.A) > 0
-            addtraces!(p, _plotjs(Econstr_lower, Envelope{Upper}([([1//0 for i in 1:ncusps_unfilled], nothing)]), color=OBSTRUCTION_COLOUR, name="obstructions")...)
-        end
-        if length(Econstr_upper.A) > 0
-            addtraces!(p, _plotjs(Envelope{Lower}([([-1//0 for i in 1:ncusps_unfilled],nothing)]), Econstr_upper, color=OBSTRUCTION_COLOUR, name="obstructions")...)
-        end
-        cnstr_pts = vcat([(Float64.(v), :upper) for (v,_) in Econstr_upper.A],
-                         [(Float64.(v), :lower) for (v,_) in Econstr_lower.A])
-        if !isempty(cnstr_pts)
-            cnstr_args = if ncusps_unfilled == 1
-                (x=[v[1] for (v,_) in cnstr_pts], y=zeros(length(cnstr_pts)))
-            elseif ncusps_unfilled == 2
-                (x=[v[1] for (v,_) in cnstr_pts], y=[v[2] for (v,_) in cnstr_pts])
-            else
-                (x=[v[1] for (v,_) in cnstr_pts], y=[v[2] for (v,_) in cnstr_pts], z=[v[3] for (v,_) in cnstr_pts], type="scatter3d")
-            end
-            #=
-            add_trace!(p, PlotlyJS.scatter(; cnstr_args..., mode="markers",
-                marker=attr(color=OBSTRUCTION_COLOUR, size=(ncusps_unfilled<=2 ? 8 : 5), symbol=""),
-                name="obstruction pts", legendgroup="obstructions", showlegend=false))
-                =#
-        end
-    end
-
-
-    function clip_df(df)
-        return df
-        return subset(df, :x => x->abs.(x).<=CLIP, :y => y->abs.(y).<=CLIP)
-    end
-
-    if nrow(longitudeDF) > 0
-        #add_trace!(p, _plotjs(tup.Elong, color=LONGITUDE_COLOUR))
-        if longitudes
-            add_trace!(p, PlotlyJS.scatter(clip_df(longitudeDF); plotting_directives()..., marker=attr(line=attr(width=0), size=(ncusps_unfilled<=2 ? 25 : 10) ./ log.(4 .- longitudeDF[!,:nchi]), color=LONGITUDE_COLOUR), text=:text, mode="markers", name="Fibration slopes"))
-        end
-        if obstructions && nrow(constrDF) > 0
-            add_trace!(p, PlotlyJS.scatter(clip_df(constrDF); plotting_directives()..., marker=attr(color=OBSTRUCTION_COLOUR, size=(ncusps_unfilled<=2 ? 5 : 3)), text=:text, mode="markers", name="obstructions"))
-        end
-    else
-        println("no longitudes")
-    end
-
-
-
-    if !isempty(targets)
-        target_args = ncusps == 1 ? (x=[t[1] for t in targets], y=zeros(length(targets))) :
-                      ncusps == 2 ? (x=[t[1] for t in targets], y=[t[2] for t in targets]) :
-                                    (x=[t[1] for t in targets], y=[t[2] for t in targets], z=[t[3] for t in targets], type="scatter3d")
-        add_trace!(p, PlotlyJS.scatter(; target_args..., mode="markers",
-            marker=attr(color="black", size=15, symbol="x"), name="filling slope"))
-    end
-
-    #=
-    crevices = PEnvelope()
-    for y in [(Vector{T}(x).+0.01, dummy_candidate) for x in crevices_general(Econstr_lower)]
-        push!(crevices, y)
-    end
-    add_trace!(p, _plotjs(crevices, color=OBSTRUCTION_COLOUR))
-    =#
-
-    #add_trace!(p, _plotjs(Econstr_all, color=OBSTRUCTION_COLOUR))
-
-
-    #add_trace!(p, _plotjs(Econstr_upper, color=OBSTRUCTION_COLOUR))
-    #add_trace!(p, _plotjs(Econstr_lower, color=OBSTRUCTION_COLOUR))
-
-    if false
-        randE = random_trials(bt, nsubdivide=3, ntrials=1000000)
-        randE2 = PEnvelope()
-        for (x,c) in randE.A
-            push!(randE2, (approximant_all_slopes(c::Candidate; time=10000), c))
-        end
-
-        #add_trace!(p, _plotjs(randE, color=TAUT_COLOUR))
-        add_trace!(p, _plotjs(randE2, color=TAUT_COLOUR, name="random sample"))
-    end
-
     if h2 && isempty(fillings)
         h2_gens = compute_H2_rel_boundary(tup.prep.fans, tup.prep.tet_faces, tup.prep.face_coorientations)
         b1 = length(h2_gens)
@@ -609,11 +511,72 @@ function quickview(tup::NamedTuple; longitudes=true, obstructions=(tup.bt.ncusps
         end
     end
 
+
+
+    if haskey(tup, :Elowerbound)
+        addtraces!(p, _plotjs(tup.Elowerbound, tup.Eupperbound, name="bound")...)
+    end
+
+    if obstructions
+        if length(Econstr_lower.A) > 0
+            addtraces!(p, _plotjs(Econstr_lower, Envelope{Upper}([([1//0 for i in 1:ncusps_unfilled], nothing)]), color=OBSTRUCTION_COLOUR, name="obstructions")...)
+        end
+        if length(Econstr_upper.A) > 0
+            addtraces!(p, _plotjs(Envelope{Lower}([([-1//0 for i in 1:ncusps_unfilled],nothing)]), Econstr_upper, color=OBSTRUCTION_COLOUR, name="obstructions")...)
+        end
+        cnstr_pts = vcat([(Float64.(v), :upper) for (v,_) in Econstr_upper.A],
+                         [(Float64.(v), :lower) for (v,_) in Econstr_lower.A])
+        if !isempty(cnstr_pts)
+            cnstr_args = if ncusps_unfilled == 1
+                (x=[v[1] for (v,_) in cnstr_pts], y=zeros(length(cnstr_pts)))
+            elseif ncusps_unfilled == 2
+                (x=[v[1] for (v,_) in cnstr_pts], y=[v[2] for (v,_) in cnstr_pts])
+            else
+                (x=[v[1] for (v,_) in cnstr_pts], y=[v[2] for (v,_) in cnstr_pts], z=[v[3] for (v,_) in cnstr_pts], type="scatter3d")
+            end
+            #=
+            add_trace!(p, PlotlyJS.scatter(; cnstr_args..., mode="markers",
+                marker=attr(color=OBSTRUCTION_COLOUR, size=(ncusps_unfilled<=2 ? 8 : 5), symbol=""),
+                name="obstruction pts", legendgroup="obstructions", showlegend=false))
+                =#
+        end
+    end
+
+    if length(Elower.A) > 0 && length(Eupper.A) > 0
+        addtraces!(p, _plotjs(Elower, Eupper, name="Foliation slopes")...)
+    end
+
+
+    function clip_df(df)
+        return df
+        return subset(df, :x => x->abs.(x).<=CLIP, :y => y->abs.(y).<=CLIP)
+    end
+
+    if nrow(longitudeDF) > 0
+        #add_trace!(p, _plotjs(tup.Elong, color=LONGITUDE_COLOUR))
+        if longitudes
+            add_trace!(p, PlotlyJS.scatter(clip_df(longitudeDF); plotting_directives()..., marker=attr(line=attr(width=0), size=(ncusps_unfilled==1 ? 40 : ncusps_unfilled==2 ? 25 : 10) ./ log.(4 .- longitudeDF[!,:nchi]), color=LONGITUDE_COLOUR), text=:text, mode="markers", name="Fibration slopes"))
+        end
+        if obstructions && nrow(constrDF) > 0
+            add_trace!(p, PlotlyJS.scatter(clip_df(constrDF); plotting_directives()..., marker=attr(color=OBSTRUCTION_COLOUR, size=(ncusps_unfilled==1 ? 10 : ncusps_unfilled==2 ? 5 : 3)), text=:text, mode="markers", legendgroup="obstructions",name="obstructions"))
+        end
+    else
+        @info "no longitudes"
+    end
+
+    if !isempty(targets)
+        target_args = ncusps == 1 ? (x=[t[1] for t in targets], y=zeros(length(targets))) :
+                      ncusps == 2 ? (x=[t[1] for t in targets], y=[t[2] for t in targets]) :
+                                    (x=[t[1] for t in targets], y=[t[2] for t in targets], z=[t[3] for t in targets], type="scatter3d")
+        add_trace!(p, PlotlyJS.scatter(; target_args..., mode="markers",
+            marker=attr(color="black", size=15, symbol="x"), name="targets"))
+    end
+
     if save_html
-        PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(index).html"))
+        PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(tup.isosig).html"))
     end
     if save_png
-        PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(index).png"), width=png_width, height=png_height, scale=png_scale)
+        PlotlyJS.savefig(p, joinpath(BATCH_DIR, "$(tup.isosig).png"), width=png_width, height=png_height, scale=png_scale)
     end
 	flush(stdout)
 
@@ -645,7 +608,7 @@ function quickview(tup::NamedTuple; longitudes=true, obstructions=(tup.bt.ncusps
             end
 
 
-            for (s,cand) in Iterators.flatten([tup.Elong.A, tup.Eupper.A, tup.Elower.A])
+            for (s,cand) in Iterators.flatten([tup.Eupper.A, tup.Elower.A, tup.Elong.A])
                 if s == rationalize.(coords)
                     global lastcand = cand
                     slope_str = replace("($(join(rationalize.(coords), ",")))", "//" => "-")
@@ -849,16 +812,12 @@ by the first entry), converts the results to PAFlow objects, loads the
 corresponding veering triangulations, and plots everything in MM's SnaPPy
 coordinate system.
 """
-function multiview(isosigs_with_fillings::Vector{String}; kwargs...)
-    # Check at least one has filling brackets; if none do, fall through to the
-    # plain multi-isosig overload.
-    if !any(contains(s, "_[") for s in isosigs_with_fillings)
-        return multiview([load(s) for s in isosigs_with_fillings]; kwargs...)
-    end
+function multiview(isosigs_with_fillings::Vector{String}; MM=isosigs_with_fillings[1], kwargs...)
+    @assert all(contains(s, "_[") for s in isosigs_with_fillings)
 
     python = "/home/jonathan/miniconda3/envs/sage/bin/python3"
-    script = joinpath(@__DIR__, "..", "isosig_isometries.py")
-    lines  = readlines(`$python $script $isosigs_with_fillings`)
+    script = joinpath(@__DIR__, "..", "pysrc", "isosig_isometries.py")
+    lines  = readlines(`$python $script $MM $isosigs_with_fillings`)
     pa_flows = parse_pA_flow_json.(lines)
     @info "flows" pa_flows
     multiview([(load(pf.isosig), pf) for pf in pa_flows]; kwargs...)
@@ -890,7 +849,11 @@ function multiview(tup_flows::Vector{<:Tuple{<:NamedTuple,PAFlow}};
                           png_width    :: Int   = 1920,
                           png_height   :: Int   = 1080,
                           png_scale    :: Real  = 1,
-                          colors       = MULTI_COLOURS)
+                          colors       = MULTI_COLOURS,
+                          basis        :: Union{Envelopes.BasisChange, Nothing} = nothing,
+                          flows        = eachindex(tup_flows),
+                          LS_envelope :: Vector{<:Tuple{<:Envelope{Lower}, <:Envelope{Upper}}} = Tuple{Envelope{Lower}, Envelope{Upper}}[])
+    tup_flows = tup_flows[collect(flows)]
     @assert !isempty(tup_flows)
     mm_ncusps = length(tup_flows[1][2].basis_change.perm)
     @assert all(length(pf.basis_change.perm) == mm_ncusps for (_, pf) in tup_flows)
@@ -905,7 +868,8 @@ function multiview(tup_flows::Vector{<:Tuple{<:NamedTuple,PAFlow}};
 
     function display_B(tup, pa_flow)
         B_raw = pa_flow.basis_change * degen_to_snappy_basis_change_obj(tup.bt)
-        return ref_inv * B_raw
+        B = ref_inv * B_raw
+        return basis === nothing ? B : basis * B
     end
 
     function namedtuple(slopes)
@@ -1113,6 +1077,12 @@ function multiview(tup_flows::Vector{<:Tuple{<:NamedTuple,PAFlow}};
                     name=obs_label, legendgroup=obs_label, showlegend=false))
             end
         end
+    end
+
+    for (El, Eu) in LS_envelope
+        addtraces!(p, _plotjs(El, Eu, color=OBSTRUCTION_COLOUR,
+                              name="L-space region",
+                              )...)
     end
 
     if save_html

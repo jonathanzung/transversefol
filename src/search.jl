@@ -561,6 +561,41 @@ function _exact_slope(c::Cand, s::State{T}) where T
     return w - visited[s]
 end
 
+function cycle_tracks(c::Cand{DiscreteHomeo{T}}) where {T}
+    result = Dict{Junction, Set{T}}()
+    for cusp in 1:c.bt.ncusps
+        s = State(rand_init(DiscreteHomeo{T}), c.bt.rungs[cusp][1][1])
+        visited = Dict{State{T}, Int}()
+        log = Tuple{Junction, T}[]
+        while !haskey(visited, s)
+            visited[s] = length(log) + 1
+            i1, J = c.bt.forward[s.e]
+            push!(log, (J, (i1, s.x)))
+            s = trace_forwards(s, c)
+        end
+        for (J, inp) in log[visited[s]:end]
+            push!(get!(result, J, Set{T}()), inp)
+        end
+    end
+    return result
+end
+
+function prune(c::Cand{DiscreteHomeo{T}}) where {T}
+    tracks = cycle_tracks(c)
+    cnew = Cand(c.bt, copy(c.d))
+    for J in c.bt.junctions
+        f = c[J]
+        vis_left  = get(tracks, J,      Set{T}())
+        vis_right = get(tracks, inv(J), Set{T}())
+        new_uniq = [tup for tup in unique(f.ordering)
+                    if tup[1] ∈ vis_left || tup[2] ∈ vis_right]
+        cnew[J]      = cleanup(DiscreteHomeo(new_uniq, f.dir, f.roundmode))
+        cnew[inv(J)] = inv(cnew[J])
+    end
+    @assert exact_slope(cnew) == exact_slope(c)
+    return cnew
+end
+
 function rung_percentage(c::Cand{H}, j::Int; time=500) where {H}
     rungs = Set(Iterators.flatten(c.bt.rungs[j]))
     
@@ -914,6 +949,7 @@ function try_improve!(E::Envelope{S,T,D}, candidates; targets=[], radius=0.2,kwa
 	@showprogress desc="Improving envelope" showspeed=true @threads for target in targets
 		for cand in population_annealing(candidates, cand->objective2(S,exact_slope(cand),target), c->jiggle(c,radius); kwargs...)
 			push!(E, (exact_slope(cand), cand))
+            #@show exact_slope(cand)
 		end
 	end
 end

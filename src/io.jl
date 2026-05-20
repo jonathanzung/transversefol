@@ -2,10 +2,12 @@ using Serialization
 
 const BATCH_DIR = "/home/jonathan/batch" #joinpath(@__DIR__, "..", "batch")
 const CLUSTER_BATCH_DIR = "/home/jonathan/engaging_sshfs/transversefol/batch"
+const PYTHON_PATH = ENV["TRANSVERSEFOL_PYTHON"]
+const BATCH_DIR = ENV["TRANSVERSEFOL_CACHE_DIR"]
 
 function _load_prep(isosig::String)
-    python = "/home/jonathan/miniconda3/envs/sage/bin/python3"
-    script = joinpath(@__DIR__, "..", "prepare.py")
+    python = PYTHON_PATH
+    script = joinpath(@__DIR__, "..", "pysrc", "prepare.py")
     json_str = read(`$python $script $isosig`, String)
     raw = JSON.parse(json_str)
 
@@ -39,7 +41,7 @@ function _load_prep(isosig::String)
 end
 
 function latest_save(filename)
-    CUTOFF = Dates.datetime2unix(Dates.DateTime(2026,02,22,00,00) + Hour(4))
+    CUTOFF = Dates.datetime2unix(Dates.DateTime(2026,03,29,00,00) + Hour(4))
 	locations=[]
     push!(locations, joinpath(BATCH_DIR, filename))
     push!(locations, joinpath(CLUSTER_BATCH_DIR, filename))
@@ -168,7 +170,7 @@ function mathematica_print(f::IO,l::Real)
 end
 
 function dump_points(isosig)
-    tup = load(isosig)#deserialize("/home/jonathan/Dropbox/jonathan/transversefol/batch/$(isosig).jls")
+    tup = load(isosig)
 
     @show length(tup.Elower.A), length(tup.Eupper.A)
     open("pointdump.ma","w") do f

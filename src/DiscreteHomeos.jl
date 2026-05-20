@@ -5,6 +5,12 @@ import Base: *
 
 getindex(t::Tuple, d::DIR) = (d==LEFT ? t[1] : t[2])
 
+
+#There are intervals l1...lm on the left and r1...rn on the left
+#ordering is a list of tuples, (l,r), where l is one of l1...lm and r is one of r1...rn
+#The list is nondecreasing in each coordinate, and every interval from the right or from the left must appear.
+#For consecutive elements, have three types: (l,r) -> (l+1,r), or (l,r)->(l,r+1), or (l,r)->(l,r)->(l+1,r+1)
+#The purpose of having the last kind is padding so that the total length of ordering is maintained during jiggling
 struct DiscreteHomeo{T} <: Homeo #todo: precompute the output heights
     ordering::Vector{Tuple{T,T}}
     dir::DIR
@@ -495,7 +501,7 @@ function jiggle(f::DiscreteHomeo, r::T) where {T}
     ordering = copy(f.ordering)
     #@assert issorted(ordering)
 
-    for i in 2:length(ordering)-1
+    for i in shuffle(2:length(ordering)-1)
         if rand() < r &&
            xor(ordering[i-1][1] == ordering[i][1],ordering[i][1] == ordering[i+1][1]) &&
            xor(ordering[i-1][2] == ordering[i][2],ordering[i][2] == ordering[i+1][2]) &&
@@ -746,7 +752,7 @@ function cleanup(f::DiscreteHomeo{T}) where {T}
     o = Tuple{T,T}[]
     for i in unique(f.ordering)
         if length(o) > 1 && o[end][1] != i[1] && o[end][2] != i[2]
-            push!(o,o[end])
+            push!(o, o[end])
         end
         push!(o,i)
     end

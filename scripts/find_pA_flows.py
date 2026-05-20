@@ -16,11 +16,8 @@ import os
 import argparse
 import json
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _HERE)                              # for prepare.py
-sys.path.insert(0, os.path.join(_HERE, "find_pA"))     # for enumerate_pA.py
-
-from enumerate_pA import pA_flows
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pysrc.enumerate_pA import pA_flows
 import snappy
 
 

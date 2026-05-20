@@ -6,8 +6,6 @@ import itertools
 
 import os
 import sys
-sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering/scripts")
-sys.path.insert(0,"/home/jonathan/Dropbox/repo/Veering")
 sys.setrecursionlimit(100000)
 
 import veering
@@ -20,10 +18,7 @@ from queue import PriorityQueue
 from itertools import count
 import pathlib
 
-
-
-sys.path.insert(0,"/home/jonathan/Dropbox/jonathan/transversefol")
-import prepare
+from . import prepare
 
 def basic_hash(manifold, digits=6):
 	return to_str_at_prec(manifold.volume(), digits) + " " + repr(manifold.homology())
@@ -57,7 +52,7 @@ def generate_census():
 #generate_census()
 
 
-_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "veering_census.sq3")
+_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "find_pA", "veering_census.sq3")
 VeeringDB=snappy.database.ManifoldTable(table='census', mfld_hash=basic_hash, db_path=_DB_PATH)
 
 def find(isosig):
@@ -229,6 +224,7 @@ def pA_flows(MM, count=10, max_drill=2, maxlength=3, max_segments=6, max_tets=20
 			prong_counts = [abs(prepare.intersection_number(a,b)) for a,b in zip(filling_slopes, degeneracy)]
 
 			if all(pc >= 2 for pc, s in zip(prong_counts,filling_slopes) if s != (0,0)):
+				#print("degeneracy", degeneracy)
 				if return_isom or return_prong_counts:
 					extras = {}
 					if return_prong_counts:

@@ -21,6 +21,8 @@ const by_cusps = [subset(veering_census, :ncusps => (n->n.==i)) for i in 1:6]
 
 const depth1 = subset(veering_census, :ncusps => (n->n.==2), :depth => (n-> n.=="F1"))
 
+const depth0 = subset(veering_census, :ncusps => (n->n.==2), :depth => (n-> n.=="F0"))
+
 function index(isosig::String)
     for i in 1:nrow(veering_census)
         if veering_census[i, :isosig] == isosig

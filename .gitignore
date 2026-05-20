@@ -5,20 +5,20 @@ __pycache__
 cysignals*
 *.svg
 *.ma
-find_pA/batch/*
+*.wls
 # Data directories
 cache/
-find_pA/dunfield_list/
-find_pA/hodgson_weeks_pA/
+pysrc/dunfield_list/
+pysrc/hodgson_weeks_pA/
+pysrc/hodgson_weeks.py
 flipper_examples/
 veering_census.txt
-find_pA/veering_census.sq3
-find_pA/veering_census_with_data.txt
+pysrc/veering_census.sq3
+pysrc/veering_census_with_data.txt
 # Generated outputs
 *.pb.gz
 *.png
 *.nb
 cruft/
-scripts/
 CLAUDE.md
 .claude/settings.json
